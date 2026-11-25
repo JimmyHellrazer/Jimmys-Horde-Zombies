@@ -316,6 +316,52 @@ local function CrowdCover(ex, ey, ez, aimX, aimY)
     end
 end
 
+local nextZoomSample, sampleFrame = 0, -1
+local bestFov, bestOrigin, bestDir = 180, nil, nil
+local sentZoom = false
+
+hook.Add("PreDrawOpaqueRenderables", "hordez_scope_zoom", function(depth, sky, sky3d)
+    if depth or sky or sky3d then return end
+
+    local frame = FrameNumber()
+    if frame ~= sampleFrame then
+        local now = CurTime()
+        if now < nextZoomSample then return end
+
+        nextZoomSample = now + 0.2
+        sampleFrame = frame
+        bestFov, bestOrigin, bestDir = 180, nil, nil
+    end
+
+    local view = render.GetViewSetup()
+    local fov = view and view.fov
+    if fov and fov > 1 and fov < bestFov then
+        bestFov = fov
+        bestOrigin = view.origin
+        bestDir = view.angles:Forward()
+    end
+end)
+
+timer.Create("hordez_scope_zoom", 0.2, 0, function()
+    if bestFov < 65 and bestOrigin and bestDir then
+        HZ.ScopeFov = bestFov
+        sentZoom = true
+        net.Start("hz_zoom", true)
+        net.WriteFloat(bestFov)
+        net.WriteVector(bestOrigin)
+        net.WriteNormal(bestDir)
+        net.SendToServer()
+    elseif sentZoom then
+        HZ.ScopeFov = nil
+        sentZoom = false
+        net.Start("hz_zoom", true)
+        net.WriteFloat(0)
+        net.SendToServer()
+    else
+        HZ.ScopeFov = nil
+    end
+end)
+
 timer.Create("hordez_detail", 0.25, 0, function()
     local count = #list
     if count == 0 then return end
@@ -330,7 +376,8 @@ timer.Create("hordez_detail", 0.25, 0, function()
     local aimX, aimY, aimZ = aim.x, aim.y, aim.z
     local occlude = cvOcclude:GetBool()
     local eyeAhead = eye + ply:GetVelocity() * LOOK_AHEAD
-    local zoom = math.tan(math.rad(math.Clamp(ply:GetFOV(), 5, 150) / 2)) / REF_TAN
+    local fov = math.min(ply:GetFOV(), HZ.ScopeFov or 180)
+    local zoom = math.tan(math.rad(math.Clamp(fov, 5, 150) / 2)) / REF_TAN
     zoom = zoom * zoom
     local lod = cvLod:GetFloat()
     local lodSqr1, lodSqr2, lodSqr3 = lod * lod, lod * lod * 4, lod * lod * 16

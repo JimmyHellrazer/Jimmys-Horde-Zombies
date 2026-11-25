@@ -1,5 +1,6 @@
 util.AddNetworkString("hz_virt")
 util.AddNetworkString("hz_virt_sync")
+util.AddNetworkString("hz_zoom")
 
 local CV = HZ.CV
 local Flow = HZ.Flow
@@ -480,10 +481,31 @@ local function DemoteZombie(zombie, pos)
     return true
 end
 
+net.Receive("hz_zoom", function(_, ply)
+    local now = CurTime()
+    if (ply.hz_zoomNext or 0) > now then return end
+
+    ply.hz_zoomNext = now + 0.1
+    local fov = net.ReadFloat()
+    if fov > 1 and fov < 65 then
+        ply.hz_zoomFov = math.Clamp(fov, 2, 65)
+        ply.hz_zoomPos = net.ReadVector()
+        ply.hz_zoomDir = net.ReadNormal()
+        ply.hz_zoomUntil = now + 1
+    else
+        ply.hz_zoomFov = nil
+        ply.hz_zoomUntil = nil
+    end
+end)
+
+local REF_TAN = math.tan(math.rad(75 / 2))
 local viewers, viewerSeen = {}, {}
+local zooms, zoomCount = {}, 0
 
 local function ViewerList()
+    local now = CurTime()
     local count = 0
+    zoomCount = 0
     for _, target in ipairs(HZ.GetTargets()) do
         count = count + 1
         viewers[count] = target.pos
@@ -495,12 +517,74 @@ local function ViewerList()
             count = count + 1
             viewers[count] = ply:GetPos()
         end
+
+        local viewEnt = ply:GetViewEntity()
+        local usingCam = IsValid(viewEnt) and viewEnt ~= ply
+        if usingCam then
+            count = count + 1
+            viewers[count] = viewEnt:GetPos()
+        end
+
+        local fov = ply:GetFOV()
+        local eye, aim
+        if ply.hz_zoomFov and (ply.hz_zoomUntil or 0) > now and (not fov or fov <= 0 or ply.hz_zoomFov < fov) then
+            fov = ply.hz_zoomFov
+            eye = ply.hz_zoomPos
+            aim = ply.hz_zoomDir
+        end
+
+        if fov and fov > 0 and fov < 65 then
+            local zScale = math.tan(math.rad(math.Clamp(fov, 5, 75) / 2)) / REF_TAN
+            local halfCone = math.rad(math.min(fov * 0.75, 45))
+            eye = eye or (usingCam and viewEnt:GetPos() or ply:EyePos())
+            aim = aim or (usingCam and viewEnt:GetForward() or ply:GetAimVector())
+            zoomCount = zoomCount + 1
+            local entry = zooms[zoomCount]
+            if not entry then
+                entry = {}
+                zooms[zoomCount] = entry
+            end
+
+            entry.ex, entry.ey, entry.ez = eye.x, eye.y, eye.z
+            entry.ax, entry.ay, entry.az = aim.x, aim.y, aim.z
+            local c = math.cos(halfCone)
+            entry.cosSqr = c * c
+            entry.tanCone = math.tan(halfCone)
+            entry.zoomSqr = zScale * zScale
+        end
     end
 
     for ent in pairs(viewerSeen) do viewerSeen[ent] = nil end
     for i = #viewers, count + 1, -1 do viewers[i] = nil end
 
     return viewers, count
+end
+
+local function ZoomDistSqr(x, y, z, best, pad)
+    if zoomCount == 0 then return best end
+
+    for i = 1, zoomCount do
+        local zv = zooms[i]
+        local dx, dy, dz = x - zv.ex, y - zv.ey, z - zv.ez
+        local along = dx * zv.ax + dy * zv.ay + dz * zv.az
+        if along > -pad then
+            local d2 = dx * dx + dy * dy + dz * dz
+            local inCone
+            if pad == 0 then
+                inCone = along > 0 and along * along >= d2 * zv.cosSqr
+            else
+                local lim = max(along, 0) * zv.tanCone + pad
+                inCone = (d2 - along * along) <= lim * lim
+            end
+
+            if inCone then
+                local scaled = d2 * zv.zoomSqr
+                if scaled < best then best = scaled end
+            end
+        end
+    end
+
+    return best
 end
 
 local function NearestTarget2(targets, targetCount, pos)
@@ -510,7 +594,7 @@ local function NearestTarget2(targets, targetCount, pos)
         if distSqr < best then best = distSqr end
     end
 
-    return best
+    return ZoomDistSqr(pos.x, pos.y, pos.z, best, 0)
 end
 
 local COVER_CELLS, COVER_RANGE = 360, 2500
@@ -693,6 +777,7 @@ timer.Create("hordez_virtual", 0.25, 0, function()
                 if distSqr < groupBest then groupBest = distSqr end
             end
 
+            groupBest = ZoomDistSqr(gx, gy, gz, groupBest, GROUP_RADIUS)
             if groupBest <= groupNearSqr then
                 group.nearest, group.cover = huge, huge
                 for _, row in pairs(group.rows) do
@@ -704,6 +789,8 @@ timer.Create("hordez_virtual", 0.25, 0, function()
                         local distSqr = dx * dx + dy * dy + dz * dz
                         if distSqr < best then best = distSqr end
                     end
+
+                    best = ZoomDistSqr(x, y, z, best, 0)
 
                     if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
                         real, promoted = real + 1, promoted + 1

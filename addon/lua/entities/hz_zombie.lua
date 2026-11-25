@@ -16,16 +16,23 @@ if CLIENT then
         HZ.ClientRegister(self)
     end
 
+    local band = bit.band
     local SHADOW_DEPTH = STUDIO_SHADOWDEPTHTEXTURE or 0x40000000
     local cvDepthDist = CreateClientConVar("hz_depth_dist", "1200", true, false,
         "Zombies beyond this range are left out of flashlight and projected texture shadows (0 = never)")
 
+    local depthDistSqr = cvDepthDist:GetFloat()
+    depthDistSqr = depthDistSqr > 0 and depthDistSqr * depthDistSqr or 0
+    cvars.AddChangeCallback("hz_depth_dist", function(_, _, new)
+        local val = tonumber(new) or 0
+        depthDistSqr = val > 0 and val * val or 0
+    end, "hordez_depth")
+
     function ENT:Draw(flags)
         if self.hz_ragdolled or self.hz_far or (self.hz_imp and (self.hz_fade or 1) >= 1) then return end
 
-        if flags and bit.band(flags, SHADOW_DEPTH) ~= 0 then
-            local depthDist = cvDepthDist:GetFloat()
-            if depthDist > 0 and (self.hz_d2 or 0) > depthDist * depthDist then return end
+        if flags and depthDistSqr > 0 and band(flags, SHADOW_DEPTH) ~= 0 and (self.hz_d2 or 0) > depthDistSqr then
+            return
         end
 
         self:DrawModel(flags)
@@ -1251,10 +1258,11 @@ function ENT:HZ_Brain(now)
     self.hz_atWall = nil
     HZ.GridMove(self, pos)
     local playerDist = HZ.NearestPlayerDist(pos)
-    local think = (playerDist < CV.hot_dist:GetFloat() and math.Rand(0.12, 0.18) or math.Rand(0.35, 0.5))
+    local hotDist = CV.hot_dist:GetFloat()
+    local think = (playerDist < hotDist and math.Rand(0.12, 0.18) or math.Rand(0.35, 0.5))
         * (self.hz_shambler and 2 or 1)
 
-    if playerDist > 500 and not (self.hz_tight and playerDist < CV.hot_dist:GetFloat()) then
+    if playerDist > 500 and not (self.hz_tight and playerDist < hotDist) then
         local load = HZ.Count / math.max(CV.think_full:GetFloat(), 1)
         if load > 1 then think = think * math.min(load, 4) end
     end
@@ -1388,7 +1396,7 @@ function ENT:HZ_Brain(now)
 
     self.hz_unreach = nil
 
-    if not self.hz_atWall and not link then
+    if not self.hz_atWall and not link and playerDist < hotDist then
         local width, closeDist, ramp
         if self.hz_shambler then
             width, closeDist, ramp = CV.spread_sh:GetFloat(), 70, 260
@@ -1402,21 +1410,25 @@ function ENT:HZ_Brain(now)
             to:Normalize()
             local flankGoal = goal + Vector(-to.y, to.x, 0) * lateral
             if not HullTrace(pos + UP20, flankGoal + UP20, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit
-                and not HullTrace(flankGoal + UP20, targetPos + UP20, FLANK_MINS, FLANK_MAXS,
-                MASK_NPCSOLID_BRUSHONLY).Hit then
+                and (not direct or not HullTrace(flankGoal + UP20, targetPos + UP20, FLANK_MINS, FLANK_MAXS,
+                MASK_NPCSOLID_BRUSHONLY).Hit) then
                 goal = flankGoal
             end
         end
     end
 
-    if not link and targetDist > 90 and playerDist < CV.hot_dist:GetFloat() then goal = self:HZ_Feel(pos, goal) end
+    local feelBlocked
+    if not link and targetDist > 90 and playerDist < hotDist then
+        goal, feelBlocked = self:HZ_Feel(pos, goal)
+    end
 
     local separation = not self.hz_atWall and HZ.Separation(self, pos)
     if separation then goal = goal + separation end
     if self.hz_sideUntil and now < self.hz_sideUntil then goal = goal + self.hz_sideOff end
     self.hz_goal = goal
     if not self.hz_falling then self:HZ_SetMove("run") end
-    if targetDist > 70 and CV.climb:GetBool() and now >= (self.hz_nextVaultTry or 0) then
+    if targetDist > 70 and playerDist < hotDist and feelBlocked ~= false and CV.climb:GetBool()
+        and now >= (self.hz_nextVaultTry or 0) then
         local from = pos + UP20
         local aheadTr = HullTrace(from, from + self:GetForward() * 30, AHEAD_MINS, AHEAD_MAXS, MASK_NPCSOLID,
             NO_ZOMBIES)
@@ -1658,19 +1670,18 @@ end
 function ENT:HZ_HitDamage(target)
     local targetPos = target:GetPos()
     local attackers = 1
-    for zombie in pairs(HZ.Zombies) do
-        if zombie ~= self and IsValid(zombie) and not zombie.hz_dead and zombie.hz_target == target
-            and zombie:GetPos():DistToSqr(targetPos) < 110 * 110 then
+    HZ.Near(targetPos, 110, function(zombie)
+        if not zombie.hz_dead and zombie.hz_target == target then
             attackers = attackers + 1
         end
-    end
+    end, self)
 
     local full = math.max(2, CV.dmg_mob_n:GetInt())
     local frac = math.Clamp((attackers - 1) / (full - 1), 0, 1)
     local solo = math.Rand(CV.dmg_solo_lo:GetFloat(), math.max(CV.dmg_solo_lo:GetFloat(), CV.dmg_solo_hi:GetFloat()))
     local mob = math.Rand(CV.dmg_mob_lo:GetFloat(), math.max(CV.dmg_mob_lo:GetFloat(), CV.dmg_mob_hi:GetFloat()))
 
-    return math.max(1, math.Round(Lerp(frac, solo, mob)))
+    return math.max(1, math.Round(Lerp(frac, solo, mob))), attackers
 end
 
 function ENT:HZ_TryHit(target, reach)
@@ -1684,14 +1695,15 @@ function ENT:HZ_TryHit(target, reach)
         return
     end
 
+    local hitDmg, attackers = self:HZ_HitDamage(target)
     local dmg = DamageInfo()
-    dmg:SetDamage(self:HZ_HitDamage(target) * (self.hz_shambler and CV.sh_damage:GetFloat() or 1))
+    dmg:SetDamage(hitDmg * (self.hz_shambler and CV.sh_damage:GetFloat() or 1))
     dmg:SetAttacker(self)
     dmg:SetInflictor(self)
     dmg:SetDamageType(DMG_SLASH)
     dmg:SetDamagePosition(target:WorldSpaceCenter())
     dmg:SetDamageForce(self:GetForward() * 2000)
-    if HZ.ZCityHit then HZ.ZCityHit(self, target, dmg) end
+    if HZ.ZCityHit then HZ.ZCityHit(self, target, dmg, attackers) end
     target:TakeDamageInfo(dmg)
     HZ.Sound(self, "hit", 72)
     if target:IsPlayer() then target:ViewPunch(Angle(math.Rand(-3, 3), math.Rand(-4, 4), math.Rand(-2, 2))) end
@@ -1700,13 +1712,13 @@ end
 function ENT:HZ_Feel(pos, goal)
     local dx, dy = goal.x - pos.x, goal.y - pos.y
     local len = math.sqrt(dx * dx + dy * dy)
-    if len < 24 then return goal end
+    if len < 24 then return goal, false end
 
     dx, dy = dx / len, dy / len
     local from = pos + FEEL_UP
     local reach = math.min(FEEL_REACH, len)
     local ahead = LineTrace(from, from + Vector(dx * reach, dy * reach, 0), MASK_NPCSOLID, NO_ZOMBIES)
-    if not ahead.Hit or ahead.StartSolid then return goal end
+    if not ahead.Hit or ahead.StartSolid then return goal, false end
 
     local normal = ahead.HitNormal
     local cross = dx * normal.y - dy * normal.x
@@ -1716,11 +1728,11 @@ function ENT:HZ_Feel(pos, goal)
         local sx = dx * FEEL_COS - dy * FEEL_SIN * side
         local sy = dy * FEEL_COS + dx * FEEL_SIN * side
         if not LineTrace(from, from + Vector(sx * FEEL_REACH, sy * FEEL_REACH, 0), MASK_NPCSOLID, NO_ZOMBIES).Hit then
-            return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z)
+            return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
         end
     end
 
-    return goal
+    return goal, true
 end
 
 function ENT:HZ_StuckCheck(now)

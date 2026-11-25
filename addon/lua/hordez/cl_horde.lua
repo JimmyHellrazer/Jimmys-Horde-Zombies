@@ -307,7 +307,7 @@ local function StartDeath(ent, kind, dir, groups, vel)
     local bones, pelvisAt = TrackedBones(deathModel, mdl)
     dying[#dying + 1] = {
         csm = deathModel, mdl = mdl, skin = ent:GetSkin(), groups = groups,
-        t0 = CurTime(), dur = dur, stop = stop, dt = 0,
+        t0 = CurTime(), dur = dur, stop = stop, dt = 0, nextStep = 0, lastSample = CurTime(),
         seq = pick.id, lastCyc = 0, yaw = Angle(0, ent:GetAngles().y, 0),
         carry = Vector(vel.x, vel.y, 0) * ((kind == HZ.DEATH_SHOTGUN and 0.15)
             or ((kind == HZ.DEATH_RUN or kind == HZ.DEATH_WALK) and 0.5) or 1),
@@ -329,11 +329,14 @@ local pelvisIn = { start = Vector(), endpos = Vector(), mins = PELVIS_MINS, maxs
     filter = FilterChars, output = pelvisTr }
 
 local kickAng = Angle()
+local DEATH_STEP = 1 / 45
 
 local function StepDying(death, now)
     local model = death.csm
-    model:MarkShadowAsDirty()
     local elapsed = now - death.t0
+    local finishing = elapsed >= death.stop
+    local sample = finishing or now >= death.nextStep
+
     local move = Vector(0, 0, 0)
     if death.carry then
         local carry = death.carry * math.exp(-4 * elapsed)
@@ -358,29 +361,20 @@ local function StepDying(death, now)
 
     if move:LengthSqr() > 0.0001 then
         local newPos = model:GetPos() + move
-        groundIn.start, groundIn.endpos = newPos + UP18, newPos - DOWN30
-        util.TraceLine(groundIn)
-        local ground = groundTr
-        if ground.Hit and not ground.StartSolid then
-            newPos.z = ground.HitPos.z
-        else
-            death.offLedge = true
+        if sample then
+            groundIn.start, groundIn.endpos = newPos + UP18, newPos - DOWN30
+            util.TraceLine(groundIn)
+            local ground = groundTr
+            if ground.Hit and not ground.StartSolid then
+                newPos.z = ground.HitPos.z
+            else
+                death.offLedge = true
+            end
         end
 
         model:SetPos(newPos)
     end
 
-    local bones, px, py, pz = death.bones, death.px, death.py, death.pz
-    for i = 1, #bones do
-        if CopyBoneSafe(model, bones[i], boneMat) then
-            px[i], py[i], pz[i] = MatrixPos(boneMat)
-        else
-            px[i] = false
-        end
-    end
-
-    local pelvisAt = death.pelvisAt
-    local lastPelvis = pelvisAt and px[pelvisAt]
     if death.kicks then
         for bone, kick in pairs(death.kicks) do
             local frac = 1 - (now - kick.t0) / kick.len
@@ -395,7 +389,27 @@ local function StepDying(death, now)
         end
     end
 
-    model:SetCycle(math.min(elapsed, death.stop) / death.dur)
+    if not sample then
+        model:SetCycle(cycle)
+        return false
+    end
+
+    death.nextStep = now + DEATH_STEP
+    model:MarkShadowAsDirty()
+
+    local bones, px, py, pz = death.bones, death.px, death.py, death.pz
+    for i = 1, #bones do
+        if CopyBoneSafe(model, bones[i], boneMat) then
+            px[i], py[i], pz[i] = MatrixPos(boneMat)
+        else
+            px[i] = false
+        end
+    end
+
+    local pelvisAt = death.pelvisAt
+    local lastPelvis = pelvisAt and px[pelvisAt]
+
+    model:SetCycle(cycle)
     model:InvalidateBoneCache()
     model:SetupBones()
     local hit = false
@@ -406,9 +420,9 @@ local function StepDying(death, now)
         hit = pelvisTr.Hit and not pelvisTr.StartSolid
     end
 
-    death.hasPrev, death.dt = true, FrameTime()
+    death.hasPrev, death.dt, death.lastSample = true, now - death.lastSample, now
 
-    return elapsed >= death.stop or hit or death.offLedge
+    return finishing or hit or death.offLedge
 end
 
 local reported = {}
@@ -471,6 +485,7 @@ net.Receive("hz_rag", function()
     end
 
     if onFire and IsValid(body) then HZ.StartBurn(body) end
+    ent.hz_nodraw = true
     ent:SetNoDraw(true)
     ent:DrawShadow(false)
 end)

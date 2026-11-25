@@ -60,7 +60,9 @@ local function CellKey(x, y)
 end
 
 function HZ.GridMove(zombie, pos)
-    local cellKey = CellKey(pos.x, pos.y)
+    local px, py, pz = pos.x, pos.y, pos.z
+    zombie.hz_gx, zombie.hz_gy, zombie.hz_gz = px, py, pz
+    local cellKey = CellKey(px, py)
     if zombie.hz_cell == cellKey then return end
 
     HZ.GridRemove(zombie)
@@ -88,7 +90,8 @@ function HZ.GridRemove(zombie)
 end
 
 function HZ.Near(pos, radius, callback, skip)
-    local cx, cy = math.floor(pos.x / CELL), math.floor(pos.y / CELL)
+    local px, py, pz = pos.x, pos.y, pos.z
+    local cx, cy = floor(px / CELL), floor(py / CELL)
     local span = math.ceil(radius / CELL)
     local radiusSqr = radius * radius
     for x = cx - span, cx + span do
@@ -97,7 +100,14 @@ function HZ.Near(pos, radius, callback, skip)
             if cell then
                 for other in pairs(cell) do
                     if other ~= skip and IsValid(other) then
-                        local distSqr = other:GetPos():DistToSqr(pos)
+                        local ox, oy, oz = other.hz_gx, other.hz_gy, other.hz_gz
+                        if not ox then
+                            local otherPos = other:GetPos()
+                            ox, oy, oz = otherPos.x, otherPos.y, otherPos.z
+                        end
+
+                        local dx, dy, dz = ox - px, oy - py, oz - pz
+                        local distSqr = dx * dx + dy * dy + dz * dz
                         if distSqr <= radiusSqr then callback(other, distSqr) end
                     end
                 end
@@ -127,8 +137,13 @@ function HZ.Separation(zombie, pos)
 
                     if other ~= zombie and IsValid(other) then
                         looked = looked + 1
-                        local otherPos = other:GetPos()
-                        local dx, dy, dz = x - otherPos.x, y - otherPos.y, posZ - otherPos.z
+                        local ox, oy, oz = other.hz_gx, other.hz_gy, other.hz_gz
+                        if not ox then
+                            local otherPos = other:GetPos()
+                            ox, oy, oz = otherPos.x, otherPos.y, otherPos.z
+                        end
+
+                        local dx, dy, dz = x - ox, y - oy, posZ - oz
                         local distSqr = dx * dx + dy * dy + dz * dz
                         if distSqr <= 1600 then
                             if distSqr < 1 then
@@ -551,8 +566,8 @@ function HZ.MeleeArc(attacker, first, dmg)
     end
 
     local hit = {}
-    for zombie in pairs(HZ.Zombies) do
-        if zombie ~= first and IsValid(zombie) and not zombie.hz_dead then
+    HZ.Near(base, range + 64, function(zombie)
+        if not zombie.hz_dead then
             local zombiePos = zombie:GetPos()
             local offset = Vector(zombiePos.x - base.x, zombiePos.y - base.y, 0)
             local len = offset:Length()
@@ -563,7 +578,7 @@ function HZ.MeleeArc(attacker, first, dmg)
                 if not tr.Hit then hit[#hit + 1] = { zombie, offset } end
             end
         end
-    end
+    end, first)
 
     if #hit == 0 then return end
 

@@ -1,6 +1,9 @@
 HZ.VirtualCl = HZ.VirtualCl or {}
 HZ.VirtualGroups = HZ.VirtualGroups or {}
-local rows, groups = HZ.VirtualCl, HZ.VirtualGroups
+HZ.VirtualBuckets = HZ.VirtualBuckets or {}
+local BUCKETS = 8
+for b = 0, BUCKETS - 1 do HZ.VirtualBuckets[b] = HZ.VirtualBuckets[b] or {} end
+local rows, groups, buckets = HZ.VirtualCl, HZ.VirtualGroups, HZ.VirtualBuckets
 local sqrt = math.sqrt
 
 local function GroupPos(group, now)
@@ -32,6 +35,7 @@ net.Receive("hz_virt", function()
         local killed = net.ReadBool()
         local row = rows[id]
         rows[id] = nil
+        buckets[id % BUCKETS][id] = nil
         if row and killed then
             local x, y, z = PosAt(row, now)
             local effect = EffectData()
@@ -59,7 +63,9 @@ net.Receive("hz_virt", function()
         local ox, oy = net.ReadInt(9), net.ReadInt(9)
         local female, shambler = net.ReadBool(), net.ReadBool()
         if group then
-            rows[id] = { id = id, group = group, ox = ox, oy = oy, female = female, shambler = shambler }
+            local row = { id = id, group = group, ox = ox, oy = oy, female = female, shambler = shambler }
+            rows[id] = row
+            buckets[id % BUCKETS][id] = row
         end
     end
 
@@ -91,4 +97,8 @@ if IsValid(LocalPlayer and LocalPlayer()) then RequestSync() end
 hook.Add("PostCleanupMap", "hordez_virtual", function()
     for id in pairs(rows) do rows[id] = nil end
     for id in pairs(groups) do groups[id] = nil end
+    for b = 0, BUCKETS - 1 do
+        local bucket = buckets[b]
+        for id in pairs(bucket) do bucket[id] = nil end
+    end
 end)

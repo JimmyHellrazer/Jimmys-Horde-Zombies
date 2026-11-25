@@ -36,23 +36,22 @@ end
 local function Attackers(target)
     local targetPos = target:GetPos()
     local count = 0
-    for zombie in pairs(HZ.Zombies) do
-        if IsValid(zombie) and not zombie.hz_dead and zombie.hz_target == target
-            and zombie:GetPos():DistToSqr(targetPos) < 110 * 110 then
+    HZ.Near(targetPos, 110, function(zombie)
+        if not zombie.hz_dead and zombie.hz_target == target then
             count = count + 1
         end
-    end
+    end)
 
     return count
 end
 
-local function TryKnockdown(zombie, ply)
+local function TryKnockdown(zombie, ply, attackers)
     if not CV.zcity_knock:GetBool() or not hg.LightStunPlayer or IsValid(ply.FakeRagdoll) then return end
 
     local now = CurTime()
     if now < (ply.hz_knockAt or 0) then return end
 
-    local mob = Attackers(ply)
+    local mob = attackers or Attackers(ply)
     local chance = 0
     if mob >= math.max(2, CV.dmg_mob_n:GetInt()) then chance = 0.06 + (mob - CV.dmg_mob_n:GetInt()) * 0.02 end
     if zombie.hz_shambler then chance = chance + 0.04 end
@@ -62,7 +61,7 @@ local function TryKnockdown(zombie, ply)
     hg.LightStunPlayer(ply, math.Rand(1.5, 2.5))
 end
 
-function HZ.ZCityHit(zombie, target, dmg)
+function HZ.ZCityHit(zombie, target, dmg, attackers)
     if not Active(target) then return end
 
     local mults = zombie.hz_shambler and SHAMBLER or RUNNER
@@ -80,7 +79,7 @@ function HZ.ZCityHit(zombie, target, dmg)
         dmg:SetDamageForce(dir * 2000)
     end
 
-    TryKnockdown(zombie, target)
+    TryKnockdown(zombie, target, attackers)
 end
 
 hook.Add("HZ_KnockedOut", "hordez_zcity", function(ply)

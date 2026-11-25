@@ -94,12 +94,14 @@ local function WriteGroupDel(id)
 end
 
 local function WriteGroupAdd(group)
+    group._pendAdd = nil
     net.WriteUInt(group.id, 16)
     WritePos(group.x, group.y, group.z)
     net.WriteUInt(min(floor(group.speed), 1023), 10)
 end
 
 local function WriteRowAdd(row)
+    row._pendAdd = nil
     net.WriteUInt(row.id, 16)
     net.WriteUInt(row.group.id, 16)
     net.WriteInt(max(-255, min(255, floor(row.ox + 0.5))), 9)
@@ -109,6 +111,7 @@ local function WriteRowAdd(row)
 end
 
 local function WriteGroupMove(group)
+    group._pendMove = nil
     net.WriteUInt(group.id, 16)
     WritePos(group.wx, group.wy, group.wz)
 end
@@ -116,9 +119,19 @@ end
 local CHUNK = 2000
 
 local function WriteList(list, write, blocked)
-    local count = blocked and 0 or min(#list, CHUNK)
+    local total = #list
+    if blocked or total == 0 then
+        net.WriteUInt(0, 16)
+        return list
+    end
+
+    local count = min(total, CHUNK)
     net.WriteUInt(count, 16)
     for i = 1, count do write(list[i]) end
+    if count >= total then
+        for i = 1, total do list[i] = nil end
+        return list
+    end
 
     return Slice(list, count + 1)
 end
@@ -162,7 +175,7 @@ local function NewGroup(pos, speed, shambler, area)
 
     local now = CurTime()
     local group = { id = id, x = pos.x, y = pos.y, z = pos.z, wx = pos.x, wy = pos.y, wz = pos.z, t0 = now, t1 = now,
-        speed = max(speed, 5), shambler = shambler, area = area, count = 0 }
+        speed = max(speed, 5), shambler = shambler, area = area, count = 0, rows = {}, _pendAdd = true }
 
     groups[id] = group
     pendGroupAdd[#pendGroupAdd + 1] = group
@@ -190,6 +203,7 @@ local function JoinGroup(row, pos, speed, area)
 
     local x, y = PosAt(best, now)
     row.group, row.ox, row.oy = best, pos.x - x, pos.y - y
+    best.rows[row.id] = row
     best.count = best.count + 1
 
     return true
@@ -226,6 +240,7 @@ function HZ.AddVirtual(pos, opts)
     rows[id] = row
     HZ.VCount = HZ.VCount + 1
     CountOwned(row, 1)
+    row._pendAdd = true
     pendAdd[#pendAdd + 1] = row
 
     return row
@@ -247,8 +262,17 @@ local function DropGroup(group)
 
     groups[group.id] = nil
     groupIds:Release(group.id)
-    Forget(pendMove, group)
-    if not Forget(pendGroupAdd, group) then pendGroupDel[#pendGroupDel + 1] = group.id end
+    if group._pendMove then
+        group._pendMove = nil
+        Forget(pendMove, group)
+    end
+
+    if group._pendAdd then
+        group._pendAdd = nil
+        Forget(pendGroupAdd, group)
+    else
+        pendGroupDel[#pendGroupDel + 1] = group.id
+    end
 end
 
 local function DropRow(row, killed)
@@ -258,9 +282,15 @@ local function DropRow(row, killed)
     HZ.VCount = HZ.VCount - 1
     CountOwned(row, -1)
     rowIds:Release(row.id)
-    if not Forget(pendAdd, row) then pendDel[#pendDel + 1] = { row.id, killed and true or false } end
+    if row._pendAdd then
+        row._pendAdd = nil
+        Forget(pendAdd, row)
+    else
+        pendDel[#pendDel + 1] = { row.id, killed and true or false }
+    end
 
     local group = row.group
+    group.rows[row.id] = nil
     group.count = group.count - 1
     if group.count <= 0 then DropGroup(group) end
 end
@@ -364,13 +394,19 @@ local function NextLeg(group, now, x, y, z)
     group.x, group.y, group.z, group.t0 = x, y, z, now
     group.wx, group.wy, group.wz = tx, ty, tz
     group.t1 = now + max(len / group.speed, 0.05) + extra
-    pendMove[#pendMove + 1] = group
+    if not group._pendMove then
+        group._pendMove = true
+        pendMove[#pendMove + 1] = group
+    end
 end
 
 local function HaltGroup(group, now, x, y, z)
     group.hold = true
     group.x, group.y, group.z, group.wx, group.wy, group.wz, group.t0, group.t1 = x, y, z, x, y, z, now, now
-    pendMove[#pendMove + 1] = group
+    if not group._pendMove then
+        group._pendMove = true
+        pendMove[#pendMove + 1] = group
+    end
 end
 
 local function PromoteRow(row, x, y, z)
@@ -431,20 +467,24 @@ local function DemoteZombie(zombie, pos)
     return true
 end
 
-local viewers = {}
+local viewers, viewerSeen = {}, {}
 
 local function ViewerList()
     local count = 0
     for _, target in ipairs(HZ.GetTargets()) do
         count = count + 1
         viewers[count] = target.pos
+        viewerSeen[target.ent] = true
     end
 
     for _, ply in ipairs(player.GetAll()) do
-        count = count + 1
-        viewers[count] = ply:GetPos()
+        if not viewerSeen[ply] then
+            count = count + 1
+            viewers[count] = ply:GetPos()
+        end
     end
 
+    for ent in pairs(viewerSeen) do viewerSeen[ent] = nil end
     for i = #viewers, count + 1, -1 do viewers[i] = nil end
 
     return viewers, count
@@ -491,8 +531,15 @@ local function CoverFor(eye, now)
         end
     end
 
-    for _, row in pairs(rows) do
-        Add(row, RowPos(row, now))
+    local groupRangeSqr = (COVER_RANGE + GROUP_RADIUS) * (COVER_RANGE + GROUP_RADIUS)
+    for _, group in pairs(groups) do
+        local gx, gy, gz = PosAt(group, now)
+        local gdx, gdy = gx - ex, gy - ey
+        if gdx * gdx + gdy * gdy <= groupRangeSqr then
+            for _, row in pairs(group.rows) do
+                Add(row, gx + row.ox, gy + row.oy, gz)
+            end
+        end
     end
 
     for i = #coverOrder, count + 1, -1 do coverOrder[i] = nil end
@@ -613,38 +660,54 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     local targets, targetCount = ViewerList()
     local near = CV.virt_near:GetFloat()
     local nearSqr = near * near
+    local groupNearSqr = (near + GROUP_RADIUS) * (near + GROUP_RADIUS)
     local cap = CV.real_max:GetInt()
     local real, promoted = HZ.Count, 0
     local waitCount = 0
+
     for _, group in pairs(groups) do
-        group.nearest, group.cover = huge, huge
-    end
+        if group.count > 0 then
+            local gx, gy, gz = PosAt(group, now)
+            group._x, group._y, group._z = gx, gy, gz
+            local groupBest = huge
+            for i = 1, targetCount do
+                local viewer = targets[i]
+                local dx, dy, dz = viewer.x - gx, viewer.y - gy, viewer.z - gz
+                local distSqr = dx * dx + dy * dy + dz * dz
+                if distSqr < groupBest then groupBest = distSqr end
+            end
 
-    for _, row in pairs(rows) do
-        local x, y, z = RowPos(row, now)
-        local best = huge
-        for i = 1, targetCount do
-            local viewer = targets[i]
-            local dx, dy, dz = viewer.x - x, viewer.y - y, viewer.z - z
-            local distSqr = dx * dx + dy * dy + dz * dz
-            if distSqr < best then best = distSqr end
-        end
+            if groupBest <= groupNearSqr then
+                group.nearest, group.cover = huge, huge
+                for _, row in pairs(group.rows) do
+                    local x, y, z = gx + row.ox, gy + row.oy, gz
+                    local best = huge
+                    for i = 1, targetCount do
+                        local viewer = targets[i]
+                        local dx, dy, dz = viewer.x - x, viewer.y - y, viewer.z - z
+                        local distSqr = dx * dx + dy * dy + dz * dz
+                        if distSqr < best then best = distSqr end
+                    end
 
-        local group = row.group
-        if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
-            real, promoted = real + 1, promoted + 1
-        else
-            if best < group.nearest then group.nearest = best end
-            if (row.hz_cover or 0) < group.cover then group.cover = row.hz_cover or 0 end
-            if best < nearSqr then
-                waitCount = waitCount + 1
-                local wait = waiting[waitCount]
-                if not wait then
-                    wait = {}
-                    waiting[waitCount] = wait
+                    if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
+                        real, promoted = real + 1, promoted + 1
+                    else
+                        if best < group.nearest then group.nearest = best end
+                        if (row.hz_cover or 0) < group.cover then group.cover = row.hz_cover or 0 end
+                        if best < nearSqr then
+                            waitCount = waitCount + 1
+                            local wait = waiting[waitCount]
+                            if not wait then
+                                wait = {}
+                                waiting[waitCount] = wait
+                            end
+
+                            wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(row), x, y, z
+                        end
+                    end
                 end
-
-                wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(row), x, y, z
+            else
+                group.nearest, group.cover = groupBest, 0
             end
         end
     end
@@ -654,7 +717,13 @@ timer.Create("hordez_virtual", 0.25, 0, function()
 
     for _, group in pairs(groups) do
         if group.count > 0 then
-            local x, y, z = PosAt(group, now)
+            local x, y, z
+            if group._x then
+                x, y, z = group._x, group._y, group._z
+                group._x = nil
+            else
+                x, y, z = PosAt(group, now)
+            end
             local cover, nearest = group.cover, group.nearest or huge
             if not cover or cover == huge then cover = 0 end
             local stop = max((300 + (group.id % 16) * 25) / (1 + cover), 90)
@@ -786,14 +855,24 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
     local now = CurTime()
     local hit, hitT, hitX, hitY, hitZ
-    for _, row in pairs(rows) do
-        local x, y, z = RowPos(row, now)
-        local cx, cy, cz = x - sx, y - sy, z + 40 - sz
-        local along = cx * dx + cy * dy + cz * dz
-        if along > 0 and along < len and (not hitT or along < hitT) then
-            local rad = 22 + min(spread * along, 60)
-            if cx * cx + cy * cy + cz * cz - along * along < rad * rad then
-                hit, hitT, hitX, hitY, hitZ = row, along, x, y, z
+    for _, group in pairs(groups) do
+        local gx, gy, gz = PosAt(group, now)
+        local gcx, gcy, gcz = gx - sx, gy - sy, gz + 40 - sz
+        local gAlong = gcx * dx + gcy * dy + gcz * dz
+        if gAlong > -GROUP_RADIUS and gAlong < len + GROUP_RADIUS then
+            local gRad = GROUP_RADIUS + 22 + min(spread * max(gAlong, 0), 60)
+            if gcx * gcx + gcy * gcy + gcz * gcz - gAlong * gAlong < gRad * gRad then
+                for _, row in pairs(group.rows) do
+                    local x, y, z = gx + row.ox, gy + row.oy, gz
+                    local cx, cy, cz = x - sx, y - sy, z + 40 - sz
+                    local along = cx * dx + cy * dy + cz * dz
+                    if along > 0 and along < len and (not hitT or along < hitT) then
+                        local rad = 22 + min(spread * along, 60)
+                        if cx * cx + cy * cy + cz * cz - along * along < rad * rad then
+                            hit, hitT, hitX, hitY, hitZ = row, along, x, y, z
+                        end
+                    end
+                end
             end
         end
     end
@@ -824,16 +903,23 @@ hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
     local rad = math.Clamp(dmg:GetDamage() * 2.5, 150, 450)
     local radiusSqr = rad * rad
     local amount = dmg:GetDamage()
+    local groupRadSqr = (rad + GROUP_RADIUS) * (rad + GROUP_RADIUS)
     local shown = 0
-    for _, row in pairs(rows) do
-        local x, y, z = RowPos(row, now)
-        local dx, dy, dz = x - center.x, y - center.y, z - center.z
-        if dx * dx + dy * dy + dz * dz < radiusSqr then
-            if shown < BLAST_REAL_MAX then
-                shown = shown + 1
-                KillAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400)
-            else
-                DropRow(row, true)
+    for _, group in pairs(groups) do
+        local gx, gy, gz = PosAt(group, now)
+        local gdx, gdy, gdz = gx - center.x, gy - center.y, gz - center.z
+        if gdx * gdx + gdy * gdy + gdz * gdz < groupRadSqr then
+            for _, row in pairs(group.rows) do
+                local x, y, z = gx + row.ox, gy + row.oy, gz
+                local dx, dy, dz = x - center.x, y - center.y, z - center.z
+                if dx * dx + dy * dy + dz * dz < radiusSqr then
+                    if shown < BLAST_REAL_MAX then
+                        shown = shown + 1
+                        KillAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400)
+                    else
+                        DropRow(row, true)
+                    end
+                end
             end
         end
     end
@@ -848,11 +934,11 @@ net.Receive("hz_virt_sync", function(_, ply)
     ply.hz_virtSync = now + 5
     local groupList, rowList = {}, {}
     for _, group in pairs(groups) do
-        if not table.HasValue(pendGroupAdd, group) then groupList[#groupList + 1] = group end
+        if not group._pendAdd then groupList[#groupList + 1] = group end
     end
 
     for _, row in pairs(rows) do
-        if not table.HasValue(pendAdd, row) and not table.HasValue(pendGroupAdd, row.group) then
+        if not row._pendAdd and not row.group._pendAdd then
             rowList[#rowList + 1] = row
         end
     end

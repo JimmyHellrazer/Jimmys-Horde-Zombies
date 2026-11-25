@@ -222,28 +222,37 @@ local cvCrowdHide = CreateClientConVar("hz_crowd_hide", "0", true, false,
 local cvOcclude = CreateClientConVar("hz_occlusion", "1", true, false,
     "Skip drawing zombies hidden behind world geometry")
 
+function HZ.SyncNoDraw(ent)
+    local hide = ent.hz_ragdolled or ent.hz_far or (ent.hz_imp and (ent.hz_fade or 1) >= 1) or false
+    if ent.hz_nodraw ~= hide then
+        ent.hz_nodraw = hide
+        ent:SetNoDraw(hide)
+    end
+end
+
 local REF_TAN = math.tan(math.rad(75 / 2))
 local OCCLUDE_FROM = 300 * 300
 local OCCLUDE_PASSES = 2
 local LOOK_AHEAD = 0.3
 local occludeOut = {}
-local occludeIn = { mask = CONTENTS_SOLID, output = occludeOut }
-local headOffset, feetOffset = Vector(0, 0, 64), Vector(0, 0, 8)
+local occludeEnd = Vector()
+local occludeIn = { mask = CONTENTS_SOLID, output = occludeOut, endpos = occludeEnd }
 
-local function Blocked(from, to)
-    occludeIn.start, occludeIn.endpos = from, to
+local function Blocked(from, tx, ty, tz)
+    occludeIn.start = from
+    occludeEnd:SetUnpacked(tx, ty, tz)
     util.TraceLine(occludeIn)
 
     return occludeOut.Hit and occludeOut.HitWorld
 end
 
-local function Hidden(ent, eye, eyeAhead)
-    local pos = ent:GetPos()
-    if not Blocked(eye, pos + headOffset) or not Blocked(eye, pos + feetOffset) then return false end
+local function Hidden(ent, px, py, pz, eye, eyeAhead)
+    if not Blocked(eye, px, py, pz + 64) or not Blocked(eye, px, py, pz + 8) then return false end
 
-    local ahead = pos + ent:GetVelocity() * LOOK_AHEAD
+    local vel = ent:GetVelocity()
+    local ax, ay, az = px + vel.x * LOOK_AHEAD, py + vel.y * LOOK_AHEAD, pz + vel.z * LOOK_AHEAD
 
-    return Blocked(eyeAhead, ahead + headOffset) and Blocked(eyeAhead, ahead + feetOffset)
+    return Blocked(eyeAhead, ax, ay, az + 64) and Blocked(eyeAhead, ax, ay, az + 8)
 end
 
 local pass = 0
@@ -259,17 +268,23 @@ local function IsNearer(a, b)
     return orderDist[a] < orderDist[b]
 end
 
-local function CrowdCover(eye)
+local function CrowdCover(ex, ey, ez, aimX, aimY)
     for i = 0, CELLS - 1 do cover[i] = 0 end
     local count = 0
     for i = 1, #list do
         local ent = list[i]
-        if IsValid(ent) and not ent.hz_ragdolled and not ent:IsDormant() then
-            count = count + 1
-            order[count] = ent
+        if IsValid(ent) and not ent.hz_ragdolled and not ent.hz_imp and not ent:IsDormant() then
             local pos = ent:GetPos()
-            ent.hz_cx, ent.hz_cy, ent.hz_cz = pos.x - eye.x, pos.y - eye.y, pos.z + 36 - eye.z
-            orderDist[ent] = ent.hz_cx * ent.hz_cx + ent.hz_cy * ent.hz_cy
+            local dx, dy = pos.x - ex, pos.y - ey
+            local distSqr = dx * dx + dy * dy
+            if distSqr < 64 * 64 or dx * aimX + dy * aimY >= -32 then
+                count = count + 1
+                order[count] = ent
+                ent.hz_cx, ent.hz_cy, ent.hz_cz = dx, dy, pos.z + 36 - ez
+                orderDist[ent] = distSqr
+            else
+                ent.hz_cover = 0
+            end
         end
     end
 
@@ -309,6 +324,9 @@ timer.Create("hordez_detail", 0.25, 0, function()
     if not IsValid(ply) then return end
 
     local eye = EyePos()
+    local ex, ey, ez = eye.x, eye.y, eye.z
+    local aim = EyeVector()
+    local aimX, aimY, aimZ = aim.x, aim.y, aim.z
     local occlude = cvOcclude:GetBool()
     local eyeAhead = eye + ply:GetVelocity() * LOOK_AHEAD
     local zoom = math.tan(math.rad(math.Clamp(ply:GetFOV(), 5, 150) / 2)) / REF_TAN
@@ -319,17 +337,21 @@ timer.Create("hordez_detail", 0.25, 0, function()
     local shadowDistSqr, drawDistSqr = secondDist * secondDist, drawDist * drawDist
     local crowd = cvCrowd:GetBool()
     local hide = cvCrowdHide:GetFloat()
-    if crowd or hide > 0 then CrowdCover(eye) end
+    if crowd or hide > 0 then CrowdCover(ex, ey, ez, aimX, aimY) end
     pass = pass + 1
-    local refresh = pass % 8 == 0
     for i = 1, count do
         local ent = list[i]
         if IsValid(ent) and not ent.hz_ragdolled then
             if ent:IsDormant() then
                 ent.hz_lod, ent.hz_shadow, ent.hz_d2, ent.hz_cover = nil, nil, nil, nil
             else
-                local distSqr = ent:GetPos():DistToSqr(eye) * zoom
+                local pos = ent:GetPos()
+                local px, py, pz = pos.x, pos.y, pos.z
+                local dx, dy, dz = px - ex, py - ey, pz - ez
+                local rawDistSqr = dx * dx + dy * dy + dz * dz
+                local distSqr = rawDistSqr * zoom
                 ent.hz_d2 = distSqr
+                local refresh = (i + pass) % 8 == 0
                 local covered = (crowd or hide > 0) and distSqr > 150 * 150 and ent.hz_cover or 0
                 local want = -1
                 if lod > 0 then
@@ -359,8 +381,9 @@ timer.Create("hordez_detail", 0.25, 0, function()
                 end
 
                 local hidden = false
-                if occlude and not ent.hz_imp and ent:GetPos():DistToSqr(eye) > OCCLUDE_FROM then
-                    ent.hz_occ = Hidden(ent, eye, eyeAhead) and (ent.hz_occ or 0) + 1 or 0
+                if occlude and not ent.hz_imp and rawDistSqr > OCCLUDE_FROM
+                    and dx * aimX + dy * aimY + (dz + 36) * aimZ > -64 then
+                    ent.hz_occ = Hidden(ent, px, py, pz, eye, eyeAhead) and (ent.hz_occ or 0) + 1 or 0
                     hidden = ent.hz_occ >= OCCLUDE_PASSES
                 else
                     ent.hz_occ = 0
@@ -368,6 +391,8 @@ timer.Create("hordez_detail", 0.25, 0, function()
 
                 ent.hz_far = ((drawDist > 0 and distSqr > drawDistSqr) or (hide > 0 and covered >= hide) or hidden)
                     or nil
+
+                HZ.SyncNoDraw(ent)
             end
         end
     end

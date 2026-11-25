@@ -212,7 +212,7 @@ end
 
 for b = 0, BUCKETS - 1 do bucketCounts[b] = 0 end
 
-local atan2, floor, cos, sin, min, max = math.atan2, math.floor, math.cos, math.sin, math.min, math.max
+local atan2, floor, cos, sin, min, max, sqrt = math.atan2, math.floor, math.cos, math.sin, math.min, math.max, math.sqrt
 local PI = math.pi
 local lightAt = Vector()
 
@@ -233,6 +233,7 @@ local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx
     end
 
     local bearing = atan2(ey - y, ex - x)
+    local cb, sb = cos(bearing), sin(bearing)
     local view = floor((bearing - facing) / (PI / 4) + 0.5) % 8
     if not cache.hz_ilt or now > cache.hz_ilt then
         cache.hz_ilt = now + 2 + (idx % 16) / 16
@@ -244,14 +245,14 @@ local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx
     end
 
     if fade < 1 then
-        x, y = x + cos(bearing) * FADE_PULL, y + sin(bearing) * FADE_PULL
+        x, y = x + cb * FADE_PULL, y + sb * FADE_PULL
     end
 
     local age = now - epoch
     local base = target.count * STRIDE
     target.count = target.count + 1
     quads[base + 1], quads[base + 2], quads[base + 3] = x - vx * age, y - vy * age, z
-    quads[base + 4], quads[base + 5] = -sin(bearing) * HALF_W, cos(bearing) * HALF_W
+    quads[base + 4], quads[base + 5] = -sb * HALF_W, cb * HALF_W
     quads[base + 6] = ((view % 4) * 8) * DU
     quads[base + 7] = (variant * 2 + (view >= 4 and 1 or 0)) * DV
     quads[base + 8], quads[base + 9] = vx, vy
@@ -274,6 +275,7 @@ local function GatherBucket(bucket, now)
     ex, ey = eye.x, eye.y
     local ez = eye.z
     bright = cvLight:GetFloat() * 127.5
+    local syncNoDraw = HZ.SyncNoDraw
 
     farLayer.buckets[bucket].count, nearLayer.buckets[bucket].count = 0, 0
 
@@ -285,10 +287,15 @@ local function GatherBucket(bucket, now)
                 and distSqr > fadeStartSqr and count < BUCKET_QUADS
 
             if not impostor then
-                if ent.hz_imp then ent.hz_imp, ent.hz_ipt, ent.hz_fade = nil, nil, nil end
+                if ent.hz_imp then
+                    ent.hz_imp, ent.hz_ipt, ent.hz_fade = nil, nil, nil
+                    syncNoDraw(ent)
+                end
             else
-                local fade = min((distSqr ^ 0.5 - fadeStart) / max(fadeEnd - fadeStart, 1), 1)
+                local dist = sqrt(distSqr)
+                local fade = min((dist - fadeStart) / max(fadeEnd - fadeStart, 1), 1)
                 ent.hz_imp, ent.hz_fade = true, fade
+                syncNoDraw(ent)
                 local pos = ent:GetPos()
                 local x, y, z = pos.x, pos.y, pos.z
                 local vx, vy = 0, 0
@@ -306,9 +313,15 @@ local function GatherBucket(bucket, now)
                     ent.hz_ifem = female
                 end
 
+                local shambler = ent.hz_isham
+                if shambler == nil then
+                    shambler = ent:GetNW2Bool("hz_shambler")
+                    ent.hz_isham = shambler
+                end
+
                 EmitQuad(bucket, ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
                     or ent:GetAngles().y * (PI / 180),
-                    ent:EntIndex(), female, ent:GetNW2Bool("hz_shambler"), distSqr ^ 0.5, fade)
+                    ent:EntIndex(), female, shambler, dist, fade)
 
                 count = count + 1
             end
@@ -317,19 +330,18 @@ local function GatherBucket(bucket, now)
 
     if ready then
         local posAt = HZ.VirtualAt
-        for id, row in pairs(HZ.VirtualCl) do
+        local vBucket = HZ.VirtualBuckets[bucket]
+        for id, row in pairs(vBucket) do
             if count >= BUCKET_QUADS then break end
 
-            if id % BUCKETS == bucket then
-                local group = row.group
-                local x, y, z = posAt(row, now)
-                local moving = now < group.t1
-                local dx, dy, dz = x - ex, y - ey, z - ez
-                EmitQuad(bucket, row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
-                    group.yaw, id, row.female, row.shambler, (dx * dx + dy * dy + dz * dz) ^ 0.5, 1)
+            local group = row.group
+            local x, y, z = posAt(row, now)
+            local moving = now < group.t1
+            local dx, dy, dz = x - ex, y - ey, z - ez
+            EmitQuad(bucket, row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
+                group.yaw, id, row.female, row.shambler, sqrt(dx * dx + dy * dy + dz * dz), 1)
 
-                count = count + 1
-            end
+            count = count + 1
         end
     end
 
@@ -423,6 +435,7 @@ local function Rebuild(now)
 end
 
 local carrier
+local lastScrW, lastScrH, lastFogR, lastFogG, lastFogB
 
 local function ShaderClock(since, clock)
     local fog, fogEnd, fogRange = 0, 1, 1
@@ -432,17 +445,24 @@ local function ShaderClock(since, clock)
         and fogStop and fogStop > fogStart then
         fog, fogEnd, fogRange = 1, fogStop, fogStop - fogStart
         local r, g, b = render.GetFogColor()
-        for _, layer in ipairs(LAYERS) do
-            layer.mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
-            layer.mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
-            layer.mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
+        if r ~= lastFogR or g ~= lastFogG or b ~= lastFogB then
+            lastFogR, lastFogG, lastFogB = r, g, b
+            local lr, lg, lb = (r / 255) ^ 2.2, (g / 255) ^ 2.2, (b / 255) ^ 2.2
+            for _, layer in ipairs(LAYERS) do
+                layer.mat:SetFloat("$c0_x", lr)
+                layer.mat:SetFloat("$c0_y", lg)
+                layer.mat:SetFloat("$c0_z", lb)
+            end
         end
     end
 
     local w, h = ScrW(), ScrH()
-    for _, layer in ipairs(LAYERS) do
-        layer.mat:SetFloat("$c1_x", w)
-        layer.mat:SetFloat("$c1_y", h)
+    if w ~= lastScrW or h ~= lastScrH then
+        lastScrW, lastScrH = w, h
+        for _, layer in ipairs(LAYERS) do
+            layer.mat:SetFloat("$c1_x", w)
+            layer.mat:SetFloat("$c1_y", h)
+        end
     end
 
     if not IsValid(carrier) then

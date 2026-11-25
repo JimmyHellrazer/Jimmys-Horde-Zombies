@@ -44,6 +44,7 @@ HZ.CV = {
     flow_budget = MakeConVar("hz_flow_budget", "1500", "Nav areas the flow field solves per tick"),
     flow_range  = MakeConVar("hz_flow_range", "9000", "Max path distance the flow field reaches"),
     flow_build  = MakeConVar("hz_flow_build_ms", "8", "Milliseconds per tick spent building the flow graph"),
+    flow_cache  = MakeConVar("hz_flow_cache", "1", "Keep each map's climb and vault links on disk between sessions"),
     flow_prebuild = MakeConVar("hz_flow_prebuild", "1",
         "Build the flow graph when the map starts instead of on first use"),
     voices      = MakeConVar("hz_voices", "6", "Zombie vocalisations allowed per second (all zombies)"),

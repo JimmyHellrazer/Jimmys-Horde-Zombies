@@ -37,10 +37,15 @@ local function BuildGraph()
 
     local started = SysTime()
     local graph = { area = {}, center = {}, inc = {}, cost = {}, ids = {} }
+    local signature = #all
     for i, area in ipairs(all) do
         local id = area:GetID()
+        local center = area:GetCenter()
+        signature = (signature * 33 + id + math.floor(center.x) * 3 + math.floor(center.y) * 5
+            + math.floor(center.z) * 7) % 2147483647
+
         graph.area[id] = area
-        graph.center[id] = area:GetCenter()
+        graph.center[id] = center
         graph.inc[id] = {}
         graph.cost[id] = {}
         graph.ids[#graph.ids + 1] = id
@@ -67,10 +72,21 @@ local function BuildGraph()
         if i % 32 == 0 then Breathe() end
     end
 
-    local links = HZ.CV.climb:GetBool() and Flow.AddClimbLinks(graph, all) or 0
+    local links, source = 0, "found"
+    if HZ.CV.climb:GetBool() then
+        links = Flow.LoadLinks(graph, signature)
+        if links then
+            source = "from cache"
+        else
+            local saved
+            links, saved = Flow.AddClimbLinks(graph, all)
+            Flow.SaveLinks(saved, signature)
+        end
+    end
+
     Flow.graph = graph
-    print(("[hordez] flow graph: %d nav areas, %d climb / vault links, built in %.1f s"):format(#graph.ids, links,
-        SysTime() - started))
+    print(("[hordez] flow graph: %d nav areas, %d climb / vault links (%s), built in %.1f s"):format(#graph.ids, links,
+        source, SysTime() - started))
 end
 
 local CELL = 128
@@ -105,6 +121,7 @@ function Flow.AddClimbLinks(graph, all)
 
     graph.climb = {}
     local count = 0
+    local saved = {}
     local seen = {}
     local vaultGapSqr, climbGapSqr = VAULT_GAP * VAULT_GAP, GAP * GAP
     for i, area in ipairs(all) do
@@ -134,6 +151,7 @@ function Flow.AddClimbLinks(graph, all)
                                     graph.cost[otherId][#incoming] = link.len + 60
                                     graph.climb[id] = graph.climb[id] or {}
                                     graph.climb[id][otherId] = link
+                                    saved[#saved + 1] = { id, otherId, link.len + 60, link }
                                     count = count + 1
                                 end
                             end
@@ -166,9 +184,11 @@ function Flow.AddClimbLinks(graph, all)
                                             local otherId = neighbor:GetID()
                                             local incoming = graph.inc[otherId]
                                             incoming[#incoming + 1] = id
+                                            local link = { foot = foot, top = top }
                                             graph.cost[otherId][#incoming] = len + dz * 2 + 80
                                             graph.climb[id] = graph.climb[id] or {}
-                                            graph.climb[id][otherId] = { foot = foot, top = top }
+                                            graph.climb[id][otherId] = link
+                                            saved[#saved + 1] = { id, otherId, len + dz * 2 + 80, link }
                                             count = count + 1
                                         end
                                     end
@@ -182,6 +202,100 @@ function Flow.AddClimbLinks(graph, all)
 
         if i % 4 == 0 then Breathe() end
     end
+
+    return count, saved
+end
+
+local LINK_MAGIC, LINK_VERSION = 0x485A4C4B, 1
+
+local function LinkFile()
+    return "hordez/links_" .. game.GetMap() .. ".dat"
+end
+
+local function MapStamp()
+    local map = game.GetMap()
+
+    return file.Time("maps/" .. map .. ".bsp", "GAME") or 0, file.Time("maps/" .. map .. ".nav", "GAME") or 0
+end
+
+function Flow.SaveLinks(saved, signature)
+    if not HZ.CV.flow_cache:GetBool() then return end
+
+    file.CreateDir("hordez")
+    local out = file.Open(LinkFile(), "wb", "DATA")
+    if not out then return end
+
+    local bspTime, navTime = MapStamp()
+    out:WriteULong(LINK_MAGIC)
+    out:WriteULong(LINK_VERSION)
+    out:WriteULong(signature)
+    out:WriteULong(bspTime)
+    out:WriteULong(navTime)
+    out:WriteULong(#saved)
+    for i, entry in ipairs(saved) do
+        local link = entry[4]
+        out:WriteULong(entry[1])
+        out:WriteULong(entry[2])
+        out:WriteFloat(entry[3])
+        out:WriteFloat(link.foot.x)
+        out:WriteFloat(link.foot.y)
+        out:WriteFloat(link.foot.z)
+        out:WriteFloat(link.top.x)
+        out:WriteFloat(link.top.y)
+        out:WriteFloat(link.top.z)
+        out:WriteBool(link.vault == true)
+        out:WriteFloat(link.h or 0)
+        out:WriteFloat(link.len or 0)
+        if i % 256 == 0 then Breathe() end
+    end
+
+    out:Close()
+end
+
+function Flow.LoadLinks(graph, signature)
+    if not HZ.CV.flow_cache:GetBool() then return nil end
+
+    local input = file.Open(LinkFile(), "rb", "DATA")
+    if not input then return nil end
+
+    local bspTime, navTime = MapStamp()
+    local fresh = input:ReadULong() == LINK_MAGIC and input:ReadULong() == LINK_VERSION
+        and input:ReadULong() == signature and input:ReadULong() == bspTime and input:ReadULong() == navTime
+
+    if not fresh then
+        input:Close()
+        return nil
+    end
+
+    local count = input:ReadULong()
+    local climb, added = {}, {}
+    for i = 1, count do
+        local id, otherId, cost = input:ReadULong(), input:ReadULong(), input:ReadFloat()
+        local foot = Vector(input:ReadFloat(), input:ReadFloat(), input:ReadFloat())
+        local top = Vector(input:ReadFloat(), input:ReadFloat(), input:ReadFloat())
+        local vault, height, len = input:ReadBool(), input:ReadFloat(), input:ReadFloat()
+        if not id or not len or not graph.inc[id] or not graph.inc[otherId] then
+            input:Close()
+            return nil
+        end
+
+        added[i] = { id, otherId, cost }
+        climb[id] = climb[id] or {}
+        climb[id][otherId] = vault and { foot = foot, top = top, vault = true, h = height, len = len }
+            or { foot = foot, top = top }
+
+        if i % 256 == 0 then Breathe() end
+    end
+
+    input:Close()
+    for i = 1, count do
+        local entry = added[i]
+        local incoming = graph.inc[entry[2]]
+        incoming[#incoming + 1] = entry[1]
+        graph.cost[entry[2]][#incoming] = entry[3]
+    end
+
+    graph.climb = climb
 
     return count
 end
@@ -452,13 +566,14 @@ function Flow.Area(id)
     return graph and graph.area[id]
 end
 
-concommand.Add("hz_flow_rebuild", function(ply)
+concommand.Add("hz_flow_rebuild", function(ply, _, args)
     if IsValid(ply) and not ply:IsAdmin() then return end
 
+    if args[1] == "fresh" then file.Delete(LinkFile()) end
     Flow.graph, Flow.noNav, Flow.ready = nil, nil, false
     Flow.dist, Flow.nxt, Flow.tgt = {}, {}, {}
     co_graph, co_solve, solvedKey = nil, nil, nil
-    print("[hordez] flow field reset; rebuilds on next use")
+    print("[hordez] flow field reset; rebuilding" .. (args[1] == "fresh" and " without the link cache" or ""))
 end)
 
 hook.Add("InitPostEntity", "hordez_flow_prebuild", function()

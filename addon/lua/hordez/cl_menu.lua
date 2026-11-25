@@ -83,10 +83,18 @@ local function ServerPanel(pos)
     pos:ControlHelp("Works with other addons' pipe bombs and bile jars: anything thrown whose class or model name contains "
         .. "one of the hz_lure_classes / hz_bile_classes words (console) counts.")
 
+    AddHeader(pos, "Barricades & glass")
+    pos:CheckBox("Zombies bash props in their way", "hz_barricade")
+    pos:NumSlider("Barricade toughness", "hz_barricade_health", 0.1, 5, 2)
+    pos:ControlHelp("A prop takes about its mass in blows (x this), frozen or welded props 2.5x more. The whole crowd pounds the same prop; when it gives it is knocked loose and passes through for 15 s. Zombies smash through breakable windows.")
+
     AddHeader(pos, "Doors")
     pos:NumSlider("Door health", "hz_door_health", 1, 1000, 0)
     pos:NumSlider("Damage per blow", "hz_door_bash", 1, 50, 0)
     pos:ControlHelp("Each zombie pounding a door lands about a blow a second (shamblers 60% damage, slower) on the same shared health. Defaults: a lone runner ~30 s, a pile of 5 ~6 s. Model doors come off their hinges; map (brush) doors burst into debris. Linked area portals are opened first, so no void bug.")
+
+    AddHeader(pos, "Idle")
+    pos:CheckBox("Idle zombies sit on chairs, benches and ledges", "hz_sit")
 
     AddHeader(pos, "Director")
     pos:NumSlider("Spawn ahead of players", "hz_director_ahead", 0, 1, 2)
@@ -109,11 +117,36 @@ local function ServerPanel(pos)
     pos:NumSlider("Voices per second", "hz_voices", 0, 30, 0)
     pos:NumSlider("Route solve budget", "hz_flow_budget", 100, 10000, 0)
     pos:NumSlider("Route range", "hz_flow_range", 1000, 30000, 0)
+    pos:NumSlider("Full-rate thinkers", "hz_think_full", 10, 1000, 0)
+    pos:ControlHelp("Up to this many zombies all think at full rate; above it the ones away from players think less often (at most 4x).")
+
+    AddHeader(pos, "Big hordes")
+    pos:CheckBox("Far chasers go virtual", "hz_virtual")
+    pos:ControlHelp("Chasing zombies far from everyone stop being entities (drawn as impostors) and turn real again as they get close. Director / spawner zombies stay real.")
+    pos:NumSlider("Max real zombies", "hz_real_max", 20, 500, 0)
+    pos:NumSlider("Turn real within", "hz_virtual_near", 500, 6000, 0)
+    pos:NumSlider("Turn virtual beyond", "hz_virtual_far", 800, 8000, 0)
+    pos:ControlHelp("Stress test from the console: hz_stress <count> [1 = chasing, 0 = idle] [radius].")
     pos:CheckBox("Debug prints", "hz_debug")
 end
 
 local function ClientPanel(pos)
     pos:Help("Effects on your screen only.")
+
+    AddHeader(pos, "Detail / distance")
+    pos:NumSlider("Reduced models from", "hz_lod_dist", 0, 3000, 0)
+    pos:ControlHelp("Next step at 2x and 4x this distance. 0 = let the engine choose.")
+    pos:NumSlider("Shadows within (-1 = all)", "hz_shadow_dist", -1, 6000, 0)
+    pos:NumSlider("Draw distance (0 = no limit)", "hz_draw_dist", 0, 20000, 0)
+    pos:CheckBox("Crowd LOD", "hz_crowd_lod")
+    pos:ControlHelp("Zombies buried behind others in a dense crowd drop to reduced models and lose their shadow.")
+    pos:NumSlider("Hide behind rows (0 = off)", "hz_crowd_hide", 0, 10, 0)
+
+    AddHeader(pos, "Impostors")
+    pos:CheckBox("Draw far zombies as impostors", "hz_impostors")
+    pos:NumSlider("Impostors beyond", "hz_impostor_dist", 500, 10000, 0)
+    pos:NumSlider("Impostor brightness", "hz_impostor_light", 0, 3, 2)
+    pos:CheckBox("Fade impostors into fog", "hz_impostor_fog")
 
     AddHeader(pos, "Death animations")
     pos:CheckBox("Play death animations", "hz_death_anims")

@@ -1224,6 +1224,14 @@ function ENT:HZ_Brain(now)
         target = aggro
     end
 
+    if not target and self.hz_omni then
+        local bestDist = math.huge
+        for _, entry in ipairs(HZ.GetTargets()) do
+            local distSqr = entry.pos:DistToSqr(pos)
+            if distSqr < bestDist and HZ.IsHostile(entry.ent) then target, bestDist = entry.ent, distSqr end
+        end
+    end
+
     if not target then
         self.hz_target, self.hz_goal = nil, nil
         if not self.hz_lost then
@@ -1238,7 +1246,7 @@ function ENT:HZ_Brain(now)
             self:HZ_SetSeq(HZ.Pick(self.P.alert_idle))
         end
 
-        if now - (self.hz_lastHasTarget or now) > 25 then self:HZ_Calm() end
+        if not self.hz_omni and now - (self.hz_lastHasTarget or now) > 25 then self:HZ_Calm() end
         return
     end
 
@@ -1666,7 +1674,12 @@ function ENT:HZ_StuckCheck(now)
         local nextId = area and HZ.Flow.nxt[area:GetID()]
         local nextArea = nextId and HZ.Flow.Area(nextId)
         if nextArea and IsValid(nextArea) then
-            self:SetPos(nextArea:GetCenter() + Vector(0, 0, 4))
+            local dest = nextArea:GetCenter() + Vector(0, 0, 4)
+            local block = util.TraceHull({ start = pos + UP20, endpos = dest + UP20, mins = Vector(-12, -12, 0),
+                maxs = Vector(12, 12, 40), mask = MASK_NPCSOLID, filter = NO_ZOMBIES }).Entity
+            if IsValid(block) and (HZ.IsBarricade(block) or block:GetClass():find("door", 1, true)) then return end
+
+            self:SetPos(dest)
             self.hz_ownMove = engine.TickCount()
             self.loco:ClearStuck()
         end

@@ -366,7 +366,8 @@ function HZ.GetTargets()
     targets = {}
     if not HZ.IgnoringPlayers() then
         for _, ply in ipairs(player.GetAll()) do
-            if ply:Alive() and not ply:IsFlagSet(FL_NOTARGET) and ply:GetMoveType() ~= MOVETYPE_NOCLIP then
+            if ply:Alive() and not ply:IsFlagSet(FL_NOTARGET) and ply:GetMoveType() ~= MOVETYPE_NOCLIP
+                and not HZ.KnockedOut(ply) then
                 targets[#targets + 1] = { ent = ply, pos = ply:GetPos(), ply = true }
             end
         end
@@ -395,9 +396,20 @@ function HZ.NearestPlayerDist(pos)
     return math.sqrt(best)
 end
 
+function HZ.KnockedOut(ply)
+    if not HZ.CV.ignore_out:GetBool() then return false end
+
+    local organism = ply.organism
+    if istable(organism) and organism.otrub then return true end
+
+    return hook.Run("HZ_KnockedOut", ply) == true
+end
+
 function HZ.IsHostile(ent)
     if not IsValid(ent) or ent:GetClass() == "hz_zombie" then return false end
-    if ent:IsPlayer() then return ent:Alive() and not HZ.IgnoringPlayers() and not ent:IsFlagSet(FL_NOTARGET) end
+    if ent:IsPlayer() then
+        return ent:Alive() and not HZ.IgnoringPlayers() and not ent:IsFlagSet(FL_NOTARGET) and not HZ.KnockedOut(ent)
+    end
 
     return (ent:IsNPC() or ent:IsNextBot()) and ent:Health() > 0
 end

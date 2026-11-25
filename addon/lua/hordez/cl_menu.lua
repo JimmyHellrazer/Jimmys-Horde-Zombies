@@ -110,6 +110,8 @@ local function ServerPanel(pos)
 
     AddHeader(pos, "NPCs")
     pos:CheckBox("Zombies hunt NPCs / NextBots", "hz_target_npcs")
+    pos:CheckBox("Lose interest in knocked out players", "hz_ignore_knocked_out")
+    pos:ControlHelp("ZCity unconscious players (or any addon using the HZ_KnockedOut hook) are left alone until they wake up.")
     pos:CheckBox("Stock NPCs fight the infected", "hz_npc_hostile")
     pos:ControlHelp("HL2 zombies and headcrabs always side with the horde.")
 

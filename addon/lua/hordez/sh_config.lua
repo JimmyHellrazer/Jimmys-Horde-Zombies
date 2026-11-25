@@ -1,5 +1,5 @@
 HZ = HZ or {}
-HZ.Version = "0.20.4"
+HZ.Version = "0.20.5"
 
 local FLAGS = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
 
@@ -40,6 +40,8 @@ HZ.CV = {
         "How much beating a prop takes (x its mass, frozen or welded props take 2.5x more)"),
     think_full  = MakeConVar("hz_think_full", "150",
         "Up to this many live zombies all think at the full rate; above it the ones not right next to a player think proportionally less often (at most 4x)"),
+    ignore_out  = MakeConVar("hz_ignore_knocked_out", "1",
+        "Zombies lose interest in knocked out / unconscious players (ZCity, or any addon using the HZ_KnockedOut hook)"),
     target_npcs = MakeConVar("hz_target_npcs", "1", "Zombies also hunt NPCs / other NextBots (TIF soldiers etc.)"),
     flow_budget = MakeConVar("hz_flow_budget", "1500", "Nav areas the flow field solves per tick"),
     flow_range  = MakeConVar("hz_flow_range", "9000", "Max path distance the flow field reaches"),

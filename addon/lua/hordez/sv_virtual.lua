@@ -343,6 +343,12 @@ local function NextLeg(group, now, x, y, z)
             end
 
             local pos = target:GetPos()
+            local cur = graph.area[area]
+            if IsValid(cur) then
+                pos = cur:GetClosestPointOnArea(pos) or pos
+                pos.z = cur:GetZ(pos)
+            end
+
             group.gx, group.gy, group.gz, group.garea, group.gextra = pos.x, pos.y, pos.z, nil, 0
         elseif nextId then
             local nextArea = graph.area[nextId]

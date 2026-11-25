@@ -41,6 +41,9 @@ net.Receive("hz_virt", function()
             local effect = EffectData()
             effect:SetOrigin(Vector(x, y, z + 44))
             effect:SetNormal(vector_up)
+            effect:SetColor(BLOOD_COLOR_RED)
+            effect:SetScale(1)
+            effect:SetFlags(3)
             util.Effect("BloodImpact", effect, true, true)
         end
     end

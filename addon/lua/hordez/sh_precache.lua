@@ -187,48 +187,82 @@ end
 
 local svWarmQueue = {}
 local svWarmEnt
-local svWarmedAnims = {}
+local svAnimModels = { "models/hordez/citizens/male_01.mdl", "models/hordez/citizens/female_01.mdl" }
+local svAnimSeq
+local SV_ANIMS_PER_TICK = 24
+
+local function EnsureSvWarmEnt(model)
+    if not IsValid(svWarmEnt) then
+        svWarmEnt = ents.Create("prop_dynamic")
+        if not IsValid(svWarmEnt) then return nil end
+
+        svWarmEnt:SetModel(model)
+        svWarmEnt:SetPos(vector_origin)
+        svWarmEnt:SetNoDraw(true)
+        svWarmEnt:SetSolid(SOLID_NONE)
+        svWarmEnt:SetMoveType(MOVETYPE_NONE)
+        svWarmEnt:Spawn()
+    else
+        svWarmEnt:SetModel(model)
+    end
+
+    return svWarmEnt
+end
+
+local function ServerWarmAnims()
+    if not svAnimSeq then
+        local model = table.remove(svAnimModels, 1)
+        if not model then return false end
+
+        local ent = EnsureSvWarmEnt(model)
+        if not ent then return false end
+
+        svAnimSeq = 0
+    end
+
+    local ent = svWarmEnt
+    if not IsValid(ent) then
+        svAnimSeq = nil
+        return false
+    end
+
+    local last = ent:GetSequenceCount() - 1
+    for _ = 1, SV_ANIMS_PER_TICK do
+        if svAnimSeq > last then
+            svAnimSeq = nil
+            return true
+        end
+
+        ent:ResetSequence(svAnimSeq)
+        ent:GetSequenceInfo(svAnimSeq)
+        ent:GetSequenceGroundSpeed(svAnimSeq)
+        ent:GetSequenceMovement(svAnimSeq, 0, 1)
+        svAnimSeq = svAnimSeq + 1
+    end
+
+    return true
+end
 
 local function ServerWarmNext()
     local model = table.remove(svWarmQueue, 1)
     if not model then
+        if ServerWarmAnims() then return end
+
         if IsValid(svWarmEnt) then svWarmEnt:Remove() end
         svWarmEnt = nil
         hook.Remove("Think", "hordez_sv_warm")
         return
     end
 
-    if not IsValid(svWarmEnt) then
-        svWarmEnt = ents.Create("prop_dynamic")
-        if not IsValid(svWarmEnt) then
-            hook.Remove("Think", "hordez_sv_warm")
-            return
-        end
-
-        svWarmEnt:SetPos(vector_origin)
-        svWarmEnt:SetNoDraw(true)
-        svWarmEnt:SetSolid(SOLID_NONE)
-        svWarmEnt:SetMoveType(MOVETYPE_NONE)
+    local ent = EnsureSvWarmEnt(model)
+    if not ent then
+        hook.Remove("Think", "hordez_sv_warm")
+        return
     end
 
-    svWarmEnt:SetModel(model)
-    local pools = HZ.ResolvePools(svWarmEnt)
-    HZ.ResolveShamblerPools(svWarmEnt)
-    if HZ.WarmBodygroups then HZ.WarmBodygroups(svWarmEnt) end
-
-    local sex = model:find("female", 1, true) and "f" or "m"
-    if not svWarmedAnims[sex] then
-        svWarmedAnims[sex] = true
-        for key, list in pairs(pools) do
-            if key ~= "climb" and key ~= "loops" and istable(list) then
-                for i = 1, #list do
-                    local seq = list[i]
-                    svWarmEnt:GetSequenceInfo(seq)
-                    svWarmEnt:GetSequenceGroundSpeed(seq)
-                end
-            end
-        end
-    end
+    HZ.ResolvePools(ent)
+    HZ.ResolveShamblerPools(ent)
+    if HZ.WarmBodygroups then HZ.WarmBodygroups(ent) end
 end
 
 function HZ.Precache()

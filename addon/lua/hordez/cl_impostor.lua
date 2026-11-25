@@ -31,23 +31,73 @@ local VARIANTS = {
 
 local rates = {}
 
-local function Layer(size, name, material)
+local CACHE_VER = 1
+local CACHE_META = "hordez/impostor_meta.json"
+
+local function Layer(size, name, material, cache)
     return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = Material(material),
         rt = GetRenderTargetEx(name, size, size, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, 0, 0,
         IMAGE_FORMAT_RGBA8888),
-        buckets = {}, count = 0 }
+        cache = cache, buckets = {}, count = 0 }
 end
 
-local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor")
-local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near")
+local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor", "hordez/impostor_far.png")
+local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near", "hordez/impostor_near.png")
 local LAYERS = { farLayer, nearLayer }
 local atlasRT = nearLayer.rt
 local dbgMat = CreateMaterial("hz_impostor_dbg", "UnlitGeneric",
     { ["$basetexture"] = atlasRT:GetName(), ["$translucent"] = 1 })
 
 local ready = false
+local fromCache = false
 local bakeAt
 local bakeModels
+
+local function SaveCache()
+    file.CreateDir("hordez")
+    for _, layer in ipairs(LAYERS) do
+        render.PushRenderTarget(layer.rt)
+        local png = render.Capture({ format = "png", alpha = true, x = 0, y = 0, w = layer.size, h = layer.size })
+        render.PopRenderTarget()
+        if not png or #png == 0 then return false end
+        file.Write(layer.cache, png)
+    end
+
+    local savedRates = {}
+    for i = 0, #VARIANTS - 1 do savedRates[i + 1] = rates[i] or 1 end
+    file.Write(CACHE_META, util.TableToJSON({ version = CACHE_VER, rates = savedRates }))
+
+    return true
+end
+
+local function LoadCache()
+    if not file.Exists(CACHE_META, "DATA") then return false end
+
+    local meta = util.JSONToTable(file.Read(CACHE_META, "DATA") or "")
+    if not istable(meta) or meta.version ~= CACHE_VER or not istable(meta.rates) or #meta.rates < #VARIANTS then
+        return false
+    end
+
+    local loaded = {}
+    for i, layer in ipairs(LAYERS) do
+        if not file.Exists(layer.cache, "DATA") then return false end
+
+        local mat = Material("data/" .. layer.cache, "smooth")
+        if not mat or mat:IsError() then return false end
+
+        local tex = mat:GetTexture("$basetexture")
+        if not tex or tex:IsError() then return false end
+
+        loaded[i] = tex
+    end
+
+    for i = 0, #VARIANTS - 1 do rates[i] = tonumber(meta.rates[i + 1]) or 1 end
+    for i, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", loaded[i]) end
+    dbgMat:SetTexture("$basetexture", loaded[2])
+    ready, fromCache = true, true
+
+    return true
+end
 
 local ACCESSORY = { beanie = true, beanies = true, glasses = true }
 
@@ -93,7 +143,7 @@ local function StandIn(variant)
 end
 
 local function StartBake()
-    ready, bakeAt = false, 1
+    ready, fromCache, bakeAt = false, false, 1
     for _, model in ipairs(bakeModels or {}) do
         if IsValid(model) then model:Remove() end
     end
@@ -181,16 +231,22 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
 
         bakeModels = {}
         for _, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", layer.rt) end
+        dbgMat:SetTexture("$basetexture", nearLayer.rt)
+        pcall(SaveCache)
         ready = true
     end
 end)
 
 function HZ.BakeImpostors()
-    if not ready and not bakeAt and cvOn:GetBool() then StartBake() end
+    if not ready and not bakeAt and cvOn:GetBool() then
+        if not LoadCache() then StartBake() end
+    end
 end
 
 hook.Add("OnScreenSizeChanged", "hordez_impostors", function()
-    if ready or bakeAt then StartBake() end
+    if (ready and not fromCache) or bakeAt then
+        if not LoadCache() then StartBake() end
+    end
 end)
 
 concommand.Add("hz_impostor_rebake", StartBake)
@@ -488,7 +544,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
 
     local now = CurTime()
     if not ready and not bakeAt and ((cvOn:GetBool() and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
-        StartBake()
+        if not LoadCache() then StartBake() end
     end
 
     Rebuild(now)

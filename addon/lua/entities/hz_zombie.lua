@@ -231,6 +231,7 @@ function ENT:HZ_PlayOnce(seq, rate, motion, zscale, face, hull, stopOnWall)
     if not seq then return end
 
     self.hz_inOnce = true
+    self.hz_yielded = true
     local result = self:HZ_PlayOnceInner(seq, rate, motion, zscale, face, hull, stopOnWall)
     self.hz_inOnce = nil
     self.hz_ownMove = engine.TickCount()
@@ -570,6 +571,7 @@ function ENT:HZ_RootPlay(seq, opts)
     local nextLook = 0
     local lastYaw = 0
     self.hz_inOnce = true
+    self.hz_yielded = true
     while true do
         if opts.look and CurTime() >= nextLook and not self.hz_alerted and not self.hz_wakeAt then
             nextLook = CurTime() + 1
@@ -1222,8 +1224,9 @@ end
 function ENT:HZ_Chase(now)
     if now >= self.hz_nextBrain then
         local t0 = HZ.ProfOn and SysTime()
+        self.hz_yielded = nil
         self:HZ_Brain(now)
-        if t0 then HZ.ProfAdd("sv_brain", SysTime() - t0) end
+        if t0 and not self.hz_yielded then HZ.ProfAdd("sv_brain", SysTime() - t0) end
     end
     if self.hz_dead or not self.hz_alerted then return end
 

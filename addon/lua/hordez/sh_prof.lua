@@ -119,19 +119,24 @@ if SERVER then
         local extra = ("real=%d virtual=%d"):format(HZ.Count or 0, HZ.VCount or 0)
         local report = BuildReport("SERVER (" .. extra .. ")", totals, elapsed)
         print(report)
-        if IsValid(ply) then
+        if IsValid(ply) and not ply:IsListenServerHost() then
             for line in report:gmatch("[^\n]+") do ply:PrintMessage(HUD_PRINTCONSOLE, line) end
         end
     end
 
-    cvars.AddChangeCallback("hz_profile", function(_, _, new)
-        local on = tobool(new)
-        if HZ.ProfOn and not on and next(totals) then PrintServerReport() end
-        HZ.ProfOn = on
-        if on then Prof.Reset() end
-    end, "hordez_prof")
+    local function SyncState()
+        local on = cvProf and cvProf:GetBool() or false
+        if on ~= HZ.ProfOn then
+            if HZ.ProfOn and not on and next(totals) then PrintServerReport() end
+            HZ.ProfOn = on
+            if on then Prof.Reset() end
+        end
+    end
+
+    hook.Add("Think", "hordez_prof_sync", SyncState)
 
     timer.Create("hordez_prof_sv", WINDOW, 0, function()
+        SyncState()
         if not HZ.ProfOn then return end
 
         local out = FlushWindow(SysTime())
@@ -189,12 +194,23 @@ local function PrintClientReport()
     print(BuildReport("CLIENT (" .. extra .. ")", totals, elapsed))
 end
 
-cvars.AddChangeCallback("hz_profile", function(_, _, new)
-    local on = tobool(new)
-    if HZ.ProfOn and not on and next(totals) then PrintClientReport() end
-    HZ.ProfOn = on
-    if on then Prof.Reset() end
-end, "hordez_prof")
+local lastFrame = SysTime()
+local smoothFt = 0
+
+local function SyncClientState()
+    local on = cvProf and cvProf:GetBool() or false
+    if on ~= HZ.ProfOn then
+        if HZ.ProfOn and not on and next(totals) then PrintClientReport() end
+        HZ.ProfOn = on
+        if on then
+            Prof.Reset()
+            lastFrame = SysTime()
+            smoothFt = 0
+        end
+    end
+end
+
+hook.Add("Think", "hordez_prof_sync", SyncClientState)
 
 net.Receive("hz_prof", function()
     local real = net.ReadUInt(16)
@@ -217,6 +233,8 @@ end)
 
 concommand.Add("hz_profile_reset", function()
     Prof.Reset()
+    lastFrame = SysTime()
+    smoothFt = 0
     net.Start("hz_prof_cmd")
     net.WriteUInt(1, 2)
     net.SendToServer()
@@ -260,10 +278,8 @@ local function SortedRows(tbl)
     return rows
 end
 
-local lastFrame = SysTime()
-local smoothFt = 0
-
 hook.Add("HUDPaint", "hordez_prof", function()
+    SyncClientState()
     if not HZ.ProfOn then return end
 
     local now = SysTime()

@@ -1,8 +1,3 @@
-# Step of build_lods.sh: patches a Crowbar-decompiled body QC in place.
-#   lod_qc.py <file.qc> <modelname>   -> prints the reference SMDs that need LOD copies, one per line
-# Sets $modelname and appends three $lod levels plus a $shadowlod that swap every mesh for its decimated copy,
-# drop facial flexes (flexed heads are skinned on the CPU) and fold finger / twist-helper bones into their
-# parents so distant zombies also set up fewer bones.
 import re, sys
 path, modelname = sys.argv[1], sys.argv[2]
 qc = open(path, encoding='latin1').read()

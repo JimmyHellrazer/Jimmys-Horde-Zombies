@@ -1,11 +1,4 @@
 #!/bin/bash
-# Rebuilds the zombie bodies in addon/models/hordez/citizens with three LOD levels and a shadow LOD.
-#   tools/build_lods.sh [model names without .mdl ...]      (default: every body)
-# Each body is decompiled (Crowbar), every mesh part gets decimated copies (Blender, lod_decimate.py), the QC
-# gets $lod / $shadowlod blocks (lod_qc.py) and is compiled again (studiomdl). The untouched files are kept in
-# tools/models_original the first time a body is rebuilt, and that copy is always what gets decompiled, so the
-# script can be re-run with other ratios without stacking decimation on decimation.
-# Needs: wine (Proton's), Crowbar's command line decompiler, GMod's studiomdl, blender. Paths below.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RATIOS="${RATIOS:-0.5,0.22,0.1}"

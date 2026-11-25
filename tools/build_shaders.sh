@@ -1,10 +1,4 @@
 #!/bin/bash
-# Compiles addon/shaders/*.hlsl into addon/shaders/fxc/*.vcs with ShaderCompile from the GMod shader guide
-# (github.com/meetric1/gmod_shader_guide, its shaders/ folder: ShaderCompile.exe and the common_*.h headers).
-#   SHADERGUIDE=/path/to/gmod_shader_guide/shaders tools/build_shaders.sh
-# Under wine a real Microsoft d3dcompiler_47.dll (64 bit) has to sit next to ShaderCompile.exe: wine's own
-# one cannot parse Valve's shader headers. D3DCOMPILER=/path/to/d3dcompiler_47.dll copies one in.
-# A shader that is already loaded is not reloaded by the game: restart it after rebuilding.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${SHADERGUIDE:?set SHADERGUIDE to the shaders/ folder of the shader guide}"

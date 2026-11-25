@@ -1,1054 +1,1175 @@
--- Horde brain: zombie registry, spatial grid, target list, hearing, voice budget, spawn helpers.
 util.AddNetworkString("hz_rag")
 util.AddNetworkString("hz_cue")
 util.AddNetworkString("hz_shot")
 
-HZ.Zombies = HZ.Zombies or {}   -- ent -> true
+HZ.Zombies = HZ.Zombies or {}
 HZ.Count = 0
-HZ.Stress = 0                   -- damage players took from zombies recently (director pacing)
+HZ.Stress = 0
 
-function HZ.Register(z)
-	if HZ.Zombies[z] then return end
-	HZ.Zombies[z] = true
-	HZ.Count = HZ.Count + 1
-	z:SetNW2String("tif_faction", "hl2_monster")   -- TIF's side marker (TIF only reads it on NPCs so far)
-	HZ.RelateZombie(z)
+function HZ.Register(zombie)
+    if HZ.Zombies[zombie] then return end
+
+    HZ.Zombies[zombie] = true
+    HZ.Count = HZ.Count + 1
+    zombie:SetNW2String("tif_faction", "hl2_monster")
+    HZ.RelateZombie(zombie)
 end
 
-function HZ.Unregister(z)
-	if not HZ.Zombies[z] then return end
-	HZ.Zombies[z] = nil
-	HZ.Count = HZ.Count - 1
-	HZ.GridRemove(z)
+function HZ.Unregister(zombie)
+    if not HZ.Zombies[zombie] then return end
+
+    HZ.Zombies[zombie] = nil
+    HZ.Count = HZ.Count - 1
+    HZ.GridRemove(zombie)
 end
 
--- global cap is optional (each system limits itself: director MaxAlive, spawner Count, drop size)
 function HZ.CanSpawn()
-	local m = HZ.CV.max:GetInt()
-	return m <= 0 or HZ.Count + (HZ.VCount or 0) < m   -- (virtual zombies count: sv_virtual.lua)
+    local cap = HZ.CV.max:GetInt()
+    return cap <= 0 or HZ.Count + (HZ.VCount or 0) < cap
 end
 
--- flow runs while anything chases or a director is active
--- (asked every tick: the walk over the registry is redone 4x a second, not each time)
 local needFlow, needFlowAt = false, 0
+
 function HZ.NeedFlow()
-	if HZ.DirectorActive or (HZ.VCount or 0) > 0 then return true end
-	local now = CurTime()
-	if now < needFlowAt then return needFlow end
-	needFlowAt = now + 0.25
-	needFlow = false
-	for z in pairs(HZ.Zombies) do
-		if z.hz_alerted then needFlow = true break end
-	end
-	return needFlow
+    if HZ.DirectorActive or (HZ.VCount or 0) > 0 then return true end
+
+    local now = CurTime()
+    if now < needFlowAt then return needFlow end
+
+    needFlowAt = now + 0.25
+    needFlow = false
+    for zombie in pairs(HZ.Zombies) do
+        if zombie.hz_alerted then
+            needFlow = true
+            break
+        end
+    end
+
+    return needFlow
 end
 
----------------------------------------------------------------- spatial grid (separation + alert spread)
-local CELL = 64   -- (a body is 24 wide: nine cells hold a crowd's worth, not the whole horde)
+local CELL = 64
 local grid = {}
 local floor, sqrt, random = math.floor, math.sqrt, math.random
 local IsValid = IsValid
-local function key(x, y) return floor(x / CELL) * 4096 + floor(y / CELL) end
 
-function HZ.GridMove(z, pos)
-	local k = key(pos.x, pos.y)
-	if z.hz_cell == k then return end
-	HZ.GridRemove(z)
-	local c = grid[k]
-	if not c then c = {} grid[k] = c end
-	c[z] = true
-	z.hz_cell = k
+local function CellKey(x, y)
+    return floor(x / CELL) * 4096 + floor(y / CELL)
 end
 
-function HZ.GridRemove(z)
-	local k = z.hz_cell
-	if not k then return end
-	local c = grid[k]
-	if c then
-		c[z] = nil
-		if next(c) == nil then grid[k] = nil end
-	end
-	z.hz_cell = nil
+function HZ.GridMove(zombie, pos)
+    local cellKey = CellKey(pos.x, pos.y)
+    if zombie.hz_cell == cellKey then return end
+
+    HZ.GridRemove(zombie)
+    local cell = grid[cellKey]
+    if not cell then
+        cell = {}
+        grid[cellKey] = cell
+    end
+
+    cell[zombie] = true
+    zombie.hz_cell = cellKey
 end
 
--- calls fn(other, distSqr) for zombies within r of pos (r <= a few cells)
-function HZ.Near(pos, r, fn, skip)
-	local cx, cy = math.floor(pos.x / CELL), math.floor(pos.y / CELL)
-	local n = math.ceil(r / CELL)
-	local r2 = r * r
-	for x = cx - n, cx + n do
-		for y = cy - n, cy + n do
-			local c = grid[x * 4096 + y]
-			if c then
-				for o in pairs(c) do
-					if o ~= skip and IsValid(o) then
-						local d2 = o:GetPos():DistToSqr(pos)
-						if d2 <= r2 then fn(o, d2) end
-					end
-				end
-			end
-		end
-	end
+function HZ.GridRemove(zombie)
+    local cellKey = zombie.hz_cell
+    if not cellKey then return end
+
+    local cell = grid[cellKey]
+    if cell then
+        cell[zombie] = nil
+        if next(cell) == nil then grid[cellKey] = nil end
+    end
+
+    zombie.hz_cell = nil
 end
 
--- push away from crowding neighbours (returns offset vector to add to a goal)
--- Runs for every chasing zombie on every brain update, so it walks the grid itself: no closure per call,
--- one position read per neighbour.
+function HZ.Near(pos, radius, callback, skip)
+    local cx, cy = math.floor(pos.x / CELL), math.floor(pos.y / CELL)
+    local span = math.ceil(radius / CELL)
+    local radiusSqr = radius * radius
+    for x = cx - span, cx + span do
+        for y = cy - span, cy + span do
+            local cell = grid[x * 4096 + y]
+            if cell then
+                for other in pairs(cell) do
+                    if other ~= skip and IsValid(other) then
+                        local distSqr = other:GetPos():DistToSqr(pos)
+                        if distSqr <= radiusSqr then callback(other, distSqr) end
+                    end
+                end
+            end
+        end
+    end
+end
+
 local SEP_NEAR, SEP_LOOK = 12, 40
 local SEP_DX = { 0, -1, 1, 0, 0, -1, -1, 1, 1 }
 local SEP_DY = { 0, 0, 0, -1, 1, -1, 1, -1, 1 }
-function HZ.Separation(z, pos)
-	local x, y, zz = pos.x, pos.y, pos.z
-	local cx, cy = floor(x / CELL), floor(y / CELL)
-	local px, py, n = 0, 0, 0
-	-- bounded: in a packed crowd the nine cells can hold a hundred bodies, and every chasing zombie asks.
-	-- The first SEP_NEAR neighbours in range (or SEP_LOOK bodies looked at) decide the push; own cell first.
-	local looked = 0
-	for k = 1, 9 do
-		if n >= SEP_NEAR or looked >= SEP_LOOK then break end
-		local gx, gy = cx + SEP_DX[k], cy + SEP_DY[k]
-		do
-			local c = grid[gx * 4096 + gy]
-			if c then
-				for o in pairs(c) do
-					if n >= SEP_NEAR or looked >= SEP_LOOK then break end
-					if o ~= z and IsValid(o) then
-						looked = looked + 1
-						local op = o:GetPos()
-						local dx, dy, dz = x - op.x, y - op.y, zz - op.z
-						local d2 = dx * dx + dy * dy + dz * dz
-						if d2 <= 1600 then
-							if d2 < 1 then
-								px, py = px + random() * 2 - 1, py + random() * 2 - 1
-							else
-								local d = sqrt(d2)
-								local w = (40 - d) / (40 * d)
-								px, py = px + dx * w, py + dy * w
-							end
-							n = n + 1
-						end
-					end
-				end
-			end
-		end
-	end
-	if n == 0 then return nil end
-	return Vector(px * 40, py * 40, 0)
+
+function HZ.Separation(zombie, pos)
+    local x, y, posZ = pos.x, pos.y, pos.z
+    local cx, cy = floor(x / CELL), floor(y / CELL)
+    local px, py, count = 0, 0, 0
+    local looked = 0
+    for slot = 1, 9 do
+        if count >= SEP_NEAR or looked >= SEP_LOOK then break end
+
+        local gx, gy = cx + SEP_DX[slot], cy + SEP_DY[slot]
+        do
+            local cell = grid[gx * 4096 + gy]
+            if cell then
+                for other in pairs(cell) do
+                    if count >= SEP_NEAR or looked >= SEP_LOOK then break end
+
+                    if other ~= zombie and IsValid(other) then
+                        looked = looked + 1
+                        local otherPos = other:GetPos()
+                        local dx, dy, dz = x - otherPos.x, y - otherPos.y, posZ - otherPos.z
+                        local distSqr = dx * dx + dy * dy + dz * dz
+                        if distSqr <= 1600 then
+                            if distSqr < 1 then
+                                px, py = px + random() * 2 - 1, py + random() * 2 - 1
+                            else
+                                local dist = sqrt(distSqr)
+                                local push = (40 - dist) / (40 * dist)
+                                px, py = px + dx * push, py + dy * push
+                            end
+
+                            count = count + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if count == 0 then return nil end
+
+    return Vector(px * 40, py * 40, 0)
 end
 
----------------------------------------------------------------- targets
 local targets, nextTargets = {}, 0
 HZ.NPCTargets = HZ.NPCTargets or {}
 
--- HL2's own undead side with the horde: never targeted by it, and they like each other
 HZ.FriendlyNPC = {
-	npc_zombie = true, npc_zombie_torso = true, npc_fastzombie = true, npc_fastzombie_torso = true,
-	npc_poisonzombie = true, npc_zombine = true, npc_headcrab = true, npc_headcrab_fast = true,
-	npc_headcrab_black = true, npc_headcrab_poison = true,
+    npc_zombie = true, npc_zombie_torso = true, npc_fastzombie = true, npc_fastzombie_torso = true,
+    npc_poisonzombie = true, npc_zombine = true, npc_headcrab = true, npc_headcrab_fast = true,
+    npc_headcrab_black = true, npc_headcrab_poison = true,
 }
 
--- Stock NPCs only fight what their relationship table says; NextBots are neutral to them by default,
--- so tell every NPC to hate each infected (equal priority to their other enemies: nearest wins).
-local function relate(npc, z)
-	if not (IsValid(npc) and IsValid(z) and npc:IsNPC()) then return end
-	if HZ.FriendlyNPC[npc:GetClass()] then
-		npc:AddEntityRelationship(z, D_LI, 0)
-	elseif HZ.CV.npc_hostile:GetBool() then
-		npc:AddEntityRelationship(z, D_HT, 0)
-	end
+local function RelateNPC(npc, zombie)
+    if not (IsValid(npc) and IsValid(zombie) and npc:IsNPC()) then return end
+
+    if HZ.FriendlyNPC[npc:GetClass()] then
+        npc:AddEntityRelationship(zombie, D_LI, 0)
+    elseif HZ.CV.npc_hostile:GetBool() then
+        npc:AddEntityRelationship(zombie, D_HT, 0)
+    end
 end
 
-function HZ.RelateZombie(z)
-	for e in pairs(HZ.NPCTargets) do relate(e, z) end
-	for e in pairs(HZ.FriendlyAllies or {}) do relate(e, z) end
+function HZ.RelateZombie(zombie)
+    for ent in pairs(HZ.NPCTargets) do RelateNPC(ent, zombie) end
+    for ent in pairs(HZ.FriendlyAllies or {}) do RelateNPC(ent, zombie) end
 end
 
-HZ.FriendlyAllies = HZ.FriendlyAllies or {}   -- HL2 undead NPCs (not targets, but still need the D_LI)
-hook.Add("OnEntityCreated", "hordez_targets", function(e)
-	timer.Simple(0, function()
-		if not IsValid(e) or e:GetClass() == "hz_zombie" then return end
-		if not (e:IsNPC() or e:IsNextBot()) then return end
-		if HZ.FriendlyNPC[e:GetClass()] then
-			HZ.FriendlyAllies[e] = true
-		else
-			HZ.NPCTargets[e] = true
-		end
-		if e:IsNPC() then
-			for z in pairs(HZ.Zombies) do relate(e, z) end
-		end
-	end)
+HZ.FriendlyAllies = HZ.FriendlyAllies or {}
+hook.Add("OnEntityCreated", "hordez_targets", function(ent)
+    timer.Simple(0, function()
+        if not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+        if not (ent:IsNPC() or ent:IsNextBot()) then return end
+
+        if HZ.FriendlyNPC[ent:GetClass()] then
+            HZ.FriendlyAllies[ent] = true
+        else
+            HZ.NPCTargets[ent] = true
+        end
+
+        if ent:IsNPC() then
+            for zombie in pairs(HZ.Zombies) do RelateNPC(ent, zombie) end
+        end
+    end)
 end)
 
--- Backup for NPCs whose own senses still don't pick a zombie up: once a second, a hostile NPC with no
--- enemy gets the nearest infected it can actually see (within 2000) as its enemy.
 local ENGAGE_R = 2000
 timer.Create("hordez_npc_engage", 1, 0, function()
-	if not HZ.CV.npc_hostile:GetBool() or HZ.Count == 0 or HZ.AIDisabled() then return end
-	for e in pairs(HZ.NPCTargets) do
-		if IsValid(e) and e:IsNPC() and e:Health() > 0 and not HZ.FriendlyNPC[e:GetClass()] then
-			local cur = e:GetEnemy()
-			if not (IsValid(cur) and cur:Health() > 0) then
-				local eye = e:EyePos()
-				local best, bd
-				for z in pairs(HZ.Zombies) do
-					if IsValid(z) and not z.hz_dead then
-						local d = z:GetPos():DistToSqr(eye)
-						if d < ENGAGE_R * ENGAGE_R and (not bd or d < bd) and e:Disposition(z) == D_HT then
-							local tr = util.TraceLine({ start = eye, endpos = z:WorldSpaceCenter(), mask = MASK_BLOCKLOS,
-								filter = { e, z } })
-							if not tr.Hit then best, bd = z, d end
-						end
-					end
-				end
-				if best then
-					e:UpdateEnemyMemory(best, best:GetPos())
-					e:SetEnemy(best)
-				end
-			end
-		end
-	end
+    if not HZ.CV.npc_hostile:GetBool() or HZ.Count == 0 or HZ.AIDisabled() then return end
+
+    for ent in pairs(HZ.NPCTargets) do
+        if IsValid(ent) and ent:IsNPC() and ent:Health() > 0 and not HZ.FriendlyNPC[ent:GetClass()] then
+            local cur = ent:GetEnemy()
+            if not (IsValid(cur) and cur:Health() > 0) then
+                local eye = ent:EyePos()
+                local best, bestDist
+                for zombie in pairs(HZ.Zombies) do
+                    if IsValid(zombie) and not zombie.hz_dead then
+                        local distSqr = zombie:GetPos():DistToSqr(eye)
+                        if distSqr < ENGAGE_R * ENGAGE_R and (not bestDist or distSqr < bestDist)
+                            and ent:Disposition(zombie) == D_HT then
+                                local tr = util.TraceLine({ start = eye, endpos = zombie:WorldSpaceCenter(),
+                                    mask = MASK_BLOCKLOS,
+                                    filter = { ent, zombie } })
+
+                                if not tr.Hit then best, bestDist = zombie, distSqr end
+                            end
+                    end
+                end
+
+                if best then
+                    ent:UpdateEnemyMemory(best, best:GetPos())
+                    ent:SetEnemy(best)
+                end
+            end
+        end
+    end
 end)
 
--- toggling hz_npc_hostile re-applies to everything alive
 cvars.AddChangeCallback("hz_npc_hostile", function(_, _, new)
-	local hostile = tobool(new)
-	for e in pairs(HZ.NPCTargets) do
-		if IsValid(e) and e:IsNPC() then
-			for z in pairs(HZ.Zombies) do
-				if IsValid(z) then e:AddEntityRelationship(z, hostile and D_HT or D_NU, 0) end
-			end
-		end
-	end
+    local hostile = tobool(new)
+    for ent in pairs(HZ.NPCTargets) do
+        if IsValid(ent) and ent:IsNPC() then
+            for zombie in pairs(HZ.Zombies) do
+                if IsValid(zombie) then ent:AddEntityRelationship(zombie, hostile and D_HT or D_NU, 0) end
+            end
+        end
+    end
 end, "hordez")
-hook.Add("EntityRemoved", "hordez_targets", function(e)
-	HZ.NPCTargets[e] = nil
-	HZ.FriendlyAllies[e] = nil
+
+hook.Add("EntityRemoved", "hordez_targets", function(ent)
+    HZ.NPCTargets[ent] = nil
+    HZ.FriendlyAllies[ent] = nil
 end)
 
----------------------------------------------------------------- lures (pipe bombs, bile)
--- Works with any addon's pipe bomb / bile jar without knowing it: a thrown entity whose class or model
--- matches hz_lure_classes is a pipe bomb (draws every infected in hz_lure_radius for as long as it exists,
--- i.e. until it blows), one matching hz_bile_classes leaves a bile lure where it lands for hz_bile_time.
--- Other addons can register their own: HZ.AddLure(entOrPos, radius, seconds), or answer the
--- "HZ_LureKind" hook (ent) with "pipe", "bile" or false.
 HZ.Lures = {}
 
--- (asked for every entity that gets created: the split list is kept until the convar's text changes)
 local patCache = {}
-local function patterns(cv)
-	local str = cv:GetString()
-	local c = patCache[cv]
-	if c and c.str == str then return c.list end
-	local t = {}
-	for p in str:lower():gmatch("[^,%s]+") do t[#t + 1] = p end
-	patCache[cv] = { str = str, list = t }
-	return t
+
+local function Patterns(convar)
+    local str = convar:GetString()
+    local cache = patCache[convar]
+    if cache and cache.str == str then return cache.list end
+
+    local list = {}
+    for pattern in str:lower():gmatch("[^,%s]+") do list[#list + 1] = pattern end
+    patCache[convar] = { str = str, list = list }
+
+    return list
 end
 
 local NOT_LURES = { prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true, prop_ragdoll = true }
-local function lureKind(e)
-	if not IsValid(e) or e:IsWeapon() or e:IsPlayer() or e:IsNPC() or e:IsNextBot() then return nil end
-	local h = hook.Run("HZ_LureKind", e)
-	if h ~= nil then return h or nil end
-	local c = e:GetClass():lower()
-	if NOT_LURES[c] or c:sub(1, 7) == "weapon_" then return nil end
-	local m = (e:GetModel() or ""):lower()
-	for _, p in ipairs(patterns(HZ.CV.lure_cls)) do
-		if c:find(p, 1, true) or m:find(p, 1, true) then return "pipe" end
-	end
-	for _, p in ipairs(patterns(HZ.CV.bile_cls)) do
-		if c:find(p, 1, true) or m:find(p, 1, true) then return "bile" end
-	end
+
+local function LureKind(ent)
+    if not IsValid(ent) or ent:IsWeapon() or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then return nil end
+
+    local hooked = hook.Run("HZ_LureKind", ent)
+    if hooked ~= nil then return hooked or nil end
+
+    local class = ent:GetClass():lower()
+    if NOT_LURES[class] or class:sub(1, 7) == "weapon_" then return nil end
+
+    local model = (ent:GetModel() or ""):lower()
+    for _, pattern in ipairs(Patterns(HZ.CV.lure_cls)) do
+        if class:find(pattern, 1, true) or model:find(pattern, 1, true) then return "pipe" end
+    end
+
+    for _, pattern in ipairs(Patterns(HZ.CV.bile_cls)) do
+        if class:find(pattern, 1, true) or model:find(pattern, 1, true) then return "bile" end
+    end
 end
 
--- ent (follows it while it exists) or a fixed position; seconds = nil lasts as long as the entity
 function HZ.AddLure(src, radius, seconds)
-	local l = { radius = radius or HZ.CV.lure_radius:GetFloat(), untilT = seconds and CurTime() + seconds or nil }
-	if isvector(src) then l.pos = src else l.ent, l.pos = src, src:GetPos() end
-	HZ.Lures[#HZ.Lures + 1] = l
-	return l
+    local lure = { radius = radius or HZ.CV.lure_radius:GetFloat(), untilT = seconds and CurTime() + seconds or nil }
+    if isvector(src) then
+        lure.pos = src
+    else
+        lure.ent, lure.pos = src, src:GetPos()
+    end
+
+    HZ.Lures[#HZ.Lures + 1] = lure
+
+    return lure
 end
 
-hook.Add("OnEntityCreated", "hordez_lures", function(e)
-	timer.Simple(0, function()   -- class and model are set by the time the next tick runs
-		local k = IsValid(e) and lureKind(e)
-		if k == "pipe" then HZ.AddLure(e)
-		elseif k == "bile" then e.hz_bile = true end
-	end)
+hook.Add("OnEntityCreated", "hordez_lures", function(ent)
+    timer.Simple(0, function()
+        local kind = IsValid(ent) and LureKind(ent)
+        if kind == "pipe" then
+            HZ.AddLure(ent)
+        elseif kind == "bile" then
+            ent.hz_bile = true
+        end
+    end)
 end)
 
-hook.Add("EntityRemoved", "hordez_lures", function(e)
-	if e.hz_bile and HZ.CV.lures:GetBool() then
-		HZ.AddLure(e:GetPos(), nil, HZ.CV.bile_time:GetFloat())
-	end
+hook.Add("EntityRemoved", "hordez_lures", function(ent)
+    if ent.hz_bile and HZ.CV.lures:GetBool() then
+        HZ.AddLure(ent:GetPos(), nil, HZ.CV.bile_time:GetFloat())
+    end
 end)
 
--- the strongest lure drawing pos (the nearest one in range)
 function HZ.LureFor(pos)
-	if #HZ.Lures == 0 or not HZ.CV.lures:GetBool() then return nil end
-	local best, bd
-	for _, l in ipairs(HZ.Lures) do
-		local d = l.pos:DistToSqr(pos)
-		if d < l.radius * l.radius and (not bd or d < bd) then best, bd = l, d end
-	end
-	return best
+    if #HZ.Lures == 0 or not HZ.CV.lures:GetBool() then return nil end
+
+    local best, bestDist
+    for _, lure in ipairs(HZ.Lures) do
+        local distSqr = lure.pos:DistToSqr(pos)
+        if distSqr < lure.radius * lure.radius and (not bestDist or distSqr < bestDist) then
+            best, bestDist = lure, distSqr
+        end
+    end
+
+    return best
 end
 
--- keep lure positions current, drop spent ones, and make them heard (wakes idle infected in range)
 timer.Create("hordez_lures", 0.25, 0, function()
-	local now = CurTime()
-	for i = #HZ.Lures, 1, -1 do
-		local l = HZ.Lures[i]
-		local alive
-		if l.ent then
-			alive = IsValid(l.ent)
-			if alive then l.pos = l.ent:GetPos() end
-		else
-			alive = now < (l.untilT or 0)
-		end
-		if alive and l.untilT and now >= l.untilT then alive = false end
-		if not alive then
-			table.remove(HZ.Lures, i)
-		elseif HZ.CV.lures:GetBool() and now >= (l.nextNoise or 0) then
-			l.nextNoise = now + 1
-			HZ.Noise(l.pos, l.radius, IsValid(l.ent) and l.ent or nil)
-		end
-	end
+    local now = CurTime()
+    for i = #HZ.Lures, 1, -1 do
+        local lure = HZ.Lures[i]
+        local alive
+        if lure.ent then
+            alive = IsValid(lure.ent)
+            if alive then lure.pos = lure.ent:GetPos() end
+        else
+            alive = now < (lure.untilT or 0)
+        end
+
+        if alive and lure.untilT and now >= lure.untilT then alive = false end
+        if not alive then
+            table.remove(HZ.Lures, i)
+        elseif HZ.CV.lures:GetBool() and now >= (lure.nextNoise or 0) then
+            lure.nextNoise = now + 1
+            HZ.Noise(lure.pos, lure.radius, IsValid(lure.ent) and lure.ent or nil)
+        end
+    end
 end)
+
 hook.Add("PostCleanupMap", "hordez_lures", function() HZ.Lures = {} end)
 
 local ignorePlayers = GetConVar("ai_ignoreplayers")
 local aiDisabled = GetConVar("ai_disabled")
 
--- Sandbox "Disable Thinking" (ai_disabled): zombies freeze in place, the director and spawners pause.
-function HZ.AIDisabled() return aiDisabled ~= nil and aiDisabled:GetBool() end
--- Sandbox "Ignore Players" (ai_ignoreplayers): players are not targets, can't aggro and aren't heard.
-function HZ.IgnoringPlayers() return ignorePlayers ~= nil and ignorePlayers:GetBool() end
+function HZ.AIDisabled()
+    return aiDisabled ~= nil and aiDisabled:GetBool()
+end
 
--- cached list { {ent=, pos=, ply=bool} } refreshed 4x a second
+function HZ.IgnoringPlayers()
+    return ignorePlayers ~= nil and ignorePlayers:GetBool()
+end
+
 function HZ.GetTargets()
-	if CurTime() < nextTargets then return targets end
-	nextTargets = CurTime() + 0.25
-	targets = {}
-	if not HZ.IgnoringPlayers() then
-		for _, p in ipairs(player.GetAll()) do
-			if p:Alive() and not p:IsFlagSet(FL_NOTARGET) and p:GetMoveType() ~= MOVETYPE_NOCLIP then
-				targets[#targets + 1] = { ent = p, pos = p:GetPos(), ply = true }
-			end
-		end
-	end
-	if HZ.CV.target_npcs:GetBool() then
-		for e in pairs(HZ.NPCTargets) do
-			if IsValid(e) and e:Health() > 0 and not e:IsFlagSet(FL_NOTARGET) then
-				targets[#targets + 1] = { ent = e, pos = e:GetPos() }
-			end
-		end
-	end
-	return targets
+    if CurTime() < nextTargets then return targets end
+
+    nextTargets = CurTime() + 0.25
+    targets = {}
+    if not HZ.IgnoringPlayers() then
+        for _, ply in ipairs(player.GetAll()) do
+            if ply:Alive() and not ply:IsFlagSet(FL_NOTARGET) and ply:GetMoveType() ~= MOVETYPE_NOCLIP then
+                targets[#targets + 1] = { ent = ply, pos = ply:GetPos(), ply = true }
+            end
+        end
+    end
+
+    if HZ.CV.target_npcs:GetBool() then
+        for ent in pairs(HZ.NPCTargets) do
+            if IsValid(ent) and ent:Health() > 0 and not ent:IsFlagSet(FL_NOTARGET) then
+                targets[#targets + 1] = { ent = ent, pos = ent:GetPos() }
+            end
+        end
+    end
+
+    return targets
 end
 
 function HZ.NearestPlayerDist(pos)
-	local best = math.huge
-	for _, t in ipairs(HZ.GetTargets()) do
-		if t.ply then
-			local d = t.pos:DistToSqr(pos)
-			if d < best then best = d end
-		end
-	end
-	return math.sqrt(best)
+    local best = math.huge
+    for _, list in ipairs(HZ.GetTargets()) do
+        if list.ply then
+            local distSqr = list.pos:DistToSqr(pos)
+            if distSqr < best then best = distSqr end
+        end
+    end
+
+    return math.sqrt(best)
 end
 
-function HZ.IsHostile(e)
-	if not IsValid(e) or e:GetClass() == "hz_zombie" then return false end
-	if e:IsPlayer() then return e:Alive() and not HZ.IgnoringPlayers() and not e:IsFlagSet(FL_NOTARGET) end
-	return (e:IsNPC() or e:IsNextBot()) and e:Health() > 0
+function HZ.IsHostile(ent)
+    if not IsValid(ent) or ent:GetClass() == "hz_zombie" then return false end
+    if ent:IsPlayer() then return ent:Alive() and not HZ.IgnoringPlayers() and not ent:IsFlagSet(FL_NOTARGET) end
+
+    return (ent:IsNPC() or ent:IsNextBot()) and ent:Health() > 0
 end
 
----------------------------------------------------------------- hearing
--- wake idle zombies in radius; farther ones react later (wave of heads turning)
 function HZ.Noise(pos, radius, source)
-	if HZ.AIDisabled() then return end
-	if IsValid(source) and source:IsPlayer() and HZ.IgnoringPlayers() then return end
-	local r2 = radius * radius
-	for z in pairs(HZ.Zombies) do
-		if not z.hz_alerted and not z.hz_wakeAt then
-			local d2 = z:GetPos():DistToSqr(pos)
-			if d2 < r2 then z:HZ_Hear(pos, math.sqrt(d2), source) end
-		end
-	end
+    if HZ.AIDisabled() then return end
+    if IsValid(source) and source:IsPlayer() and HZ.IgnoringPlayers() then return end
+
+    local radiusSqr = radius * radius
+    for zombie in pairs(HZ.Zombies) do
+        if not zombie.hz_alerted and not zombie.hz_wakeAt then
+            local distSqr = zombie:GetPos():DistToSqr(pos)
+            if distSqr < radiusSqr then zombie:HZ_Hear(pos, math.sqrt(distSqr), source) end
+        end
+    end
 end
 
-function HZ.Spread(z)
-	local pos = z:GetPos()
-	HZ.Near(pos, HZ.CV.spread:GetFloat(), function(o)
-		if not o.hz_alerted and not o.hz_wakeAt then o:HZ_Hear(pos, pos:Distance(o:GetPos()), z) end
-	end, z)
+function HZ.Spread(zombie)
+    local pos = zombie:GetPos()
+    HZ.Near(pos, HZ.CV.spread:GetFloat(), function(other)
+        if not other.hz_alerted and not other.hz_wakeAt then
+            other:HZ_Hear(pos, pos:Distance(other:GetPos()), zombie)
+        end
+    end, zombie)
 end
 
-hook.Add("EntityFireBullets", "hordez_hear", function(e)
-	if not IsValid(e) or e:GetClass() == "hz_zombie" then return end
-	local t = CurTime()
-	if (e.hz_lastNoise or 0) > t then return end
-	e.hz_lastNoise = t + 0.3
-	HZ.Noise(e:GetPos(), HZ.CV.hear_gun:GetFloat(), e)
+hook.Add("EntityFireBullets", "hordez_hear", function(ent)
+    if not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+
+    local now = CurTime()
+    if (ent.hz_lastNoise or 0) > now then return end
+
+    ent.hz_lastNoise = now + 0.3
+    HZ.Noise(ent:GetPos(), HZ.CV.hear_gun:GetFloat(), ent)
 end)
 
--- Bullets don't hit the clientside death animations / ragdolls, so shots near recent kills are relayed and
--- the clients test them against the bodies themselves (flinches, early ragdoll, ragdoll pushes).
 HZ.LastDeath = HZ.LastDeath or -1000
-hook.Add("EntityFireBullets", "hordez_corpses", function(e, data)
-	if CurTime() - HZ.LastDeath > 30 or not IsValid(e) or e:GetClass() == "hz_zombie" then return end
-	local num = math.Clamp(data.Num or 1, 1, 32)
-	local spread = data.Spread or vector_origin
-	net.Start("hz_shot", true)
-	net.WriteVector(data.Src)
-	net.WriteNormal(data.Dir:GetNormalized())
-	net.WriteUInt(num, 5)
-	net.WriteFloat(math.max(spread.x, spread.y))
-	net.WriteUInt(math.Clamp(math.floor(data.Damage or 10), 0, 1023), 10)
-	net.SendPVS(data.Src)
+hook.Add("EntityFireBullets", "hordez_corpses", function(ent, data)
+    if CurTime() - HZ.LastDeath > 30 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+
+    local count = math.Clamp(data.Num or 1, 1, 32)
+    local spread = data.Spread or vector_origin
+    net.Start("hz_shot", true)
+    net.WriteVector(data.Src)
+    net.WriteNormal(data.Dir:GetNormalized())
+    net.WriteUInt(count, 5)
+    net.WriteFloat(math.max(spread.x, spread.y))
+    net.WriteUInt(math.Clamp(math.floor(data.Damage or 10), 0, 1023), 10)
+    net.SendPVS(data.Src)
 end)
 
 hook.Add("EntityTakeDamage", "hordez_hear", function(target, dmg)
-	if dmg:IsExplosionDamage() then
-		local t = CurTime()
-		if (HZ.lastBlast or 0) < t then
-			HZ.lastBlast = t + 0.2
-			HZ.Noise(dmg:GetDamagePosition(), HZ.CV.hear_blast:GetFloat(), dmg:GetAttacker())
-		end
-	end
-	if target:IsPlayer() then
-		local a = dmg:GetAttacker()
-		if IsValid(a) and a:GetClass() == "hz_zombie" then HZ.Stress = HZ.Stress + dmg:GetDamage() end
-	end
+    if dmg:IsExplosionDamage() then
+        local now = CurTime()
+        if (HZ.lastBlast or 0) < now then
+            HZ.lastBlast = now + 0.2
+            HZ.Noise(dmg:GetDamagePosition(), HZ.CV.hear_blast:GetFloat(), dmg:GetAttacker())
+        end
+    end
+
+    if target:IsPlayer() then
+        local attacker = dmg:GetAttacker()
+        if IsValid(attacker) and attacker:GetClass() == "hz_zombie" then HZ.Stress = HZ.Stress + dmg:GetDamage() end
+    end
 end)
 
----------------------------------------------------------------- melee / shove arc
--- L4D2 swings and shoves sweep a line in front of you; GMod SWEPs hit one thing. When a SWEP's melee hit
--- or shove lands on one infected (seen from its damage, or from the push it gives), every other infected
--- in an arc in front of the attacker is staggered too, and for real melee hits takes the same damage.
--- No SWEP is touched; this only reads what the hit looked like.
 local BULLETISH = bit.bor(DMG_BULLET, DMG_BUCKSHOT, DMG_BURN, DMG_SLOWBURN, DMG_POISON, DMG_NERVEGAS,
-	DMG_RADIATION, DMG_DROWN, DMG_SHOCK, DMG_ENERGYBEAM, DMG_DISSOLVE)
+    DMG_RADIATION, DMG_DROWN, DMG_SHOCK, DMG_ENERGYBEAM, DMG_DISSOLVE)
+
 HZ.MELEE_REACH = 130
 
--- the attacker, if this hit looks like a melee swing / bash / kick from up close
 function HZ.MeleeAttacker(victim, dmg)
-	local att = dmg:GetAttacker()
-	if not IsValid(att) or att == victim or att:GetClass() == "hz_zombie" then return end
-	if dmg:IsExplosionDamage() or dmg:IsDamageType(bit.bor(DMG_CRUSH, DMG_VEHICLE)) then return end
-	if (victim:GetPos() - att:GetPos()):Length2DSqr() >= HZ.MELEE_REACH * HZ.MELEE_REACH then return end
-	if dmg:IsDamageType(bit.bor(DMG_CLUB, DMG_SLASH)) then return att end
-	local t = dmg:GetDamageType()
-	if t ~= DMG_GENERIC and not dmg:IsDamageType(BULLETISH) then return att end
-	local inf = dmg:GetInflictor()
-	if t == DMG_GENERIC and IsValid(inf) and inf:IsWeapon() and dmg:GetDamageForce():LengthSqr() > 1 then return att end
+    local attacker = dmg:GetAttacker()
+    if not IsValid(attacker) or attacker == victim or attacker:GetClass() == "hz_zombie" then return end
+    if dmg:IsExplosionDamage() or dmg:IsDamageType(bit.bor(DMG_CRUSH, DMG_VEHICLE)) then return end
+    if (victim:GetPos() - attacker:GetPos()):Length2DSqr() >= HZ.MELEE_REACH * HZ.MELEE_REACH then return end
+    if dmg:IsDamageType(bit.bor(DMG_CLUB, DMG_SLASH)) then return attacker end
+
+    local dmgType = dmg:GetDamageType()
+    if dmgType ~= DMG_GENERIC and not dmg:IsDamageType(BULLETISH) then return attacker end
+
+    local inflictor = dmg:GetInflictor()
+    if dmgType == DMG_GENERIC and IsValid(inflictor) and inflictor:IsWeapon()
+        and dmg:GetDamageForce():LengthSqr() > 1 then
+            return attacker
+        end
 end
 
--- the player who most likely shoved this zombie (a push with no damage carries no attacker)
-function HZ.ShoverOf(z)
-	local pos = z:GetPos()
-	local best, bd
-	for _, p in ipairs(player.GetAll()) do
-		if p:Alive() then
-			local rel = pos - p:GetPos()
-			local d = rel:Length2DSqr()
-			if d < 150 * 150 then
-				rel.z = 0
-				local aim = p:GetAimVector()
-				aim.z = 0
-				if rel:LengthSqr() > 1 and aim:LengthSqr() > 0.01 and rel:GetNormalized():Dot(aim:GetNormalized()) > 0.4
-					and (not bd or d < bd) then
-					best, bd = p, d
-				end
-			end
-		end
-	end
-	return best
+function HZ.ShoverOf(zombie)
+    local pos = zombie:GetPos()
+    local best, bestDist
+    for _, ply in ipairs(player.GetAll()) do
+        if ply:Alive() then
+            local offset = pos - ply:GetPos()
+            local distSqr = offset:Length2DSqr()
+            if distSqr < 150 * 150 then
+                offset.z = 0
+                local aim = ply:GetAimVector()
+                aim.z = 0
+                if offset:LengthSqr() > 1 and aim:LengthSqr() > 0.01
+                    and offset:GetNormalized():Dot(aim:GetNormalized()) > 0.4
+                    and (not bestDist or distSqr < bestDist) then
+                        best, bestDist = ply, distSqr
+                    end
+            end
+        end
+    end
+
+    return best
 end
 
 HZ.ArcBusy = false
-function HZ.MeleeArc(att, first, dmg)
-	if not HZ.CV.arc:GetBool() or not IsValid(att) then return end
-	local now = CurTime()
-	if (att.hz_arcUntil or 0) > now then return end   -- one sweep per swing
-	att.hz_arcUntil = now + 0.25
-	local aim = att:IsPlayer() and att:GetAimVector() or att:GetForward()
-	aim = Vector(aim.x, aim.y, 0)
-	if aim:LengthSqr() < 0.01 then return end
-	aim:Normalize()
-	local base = att:GetPos()
-	local eye = att.GetShootPos and att:GetShootPos() or att:WorldSpaceCenter()
-	local range = HZ.CV.arc_range:GetFloat()
-	local cosA = math.cos(math.rad(HZ.CV.arc_angle:GetFloat()))
-	local scale = dmg and HZ.CV.arc_damage:GetFloat() or 0
-	local amount, dtype, inf, force = 0, DMG_CLUB, att, 0
-	if dmg then
-		amount, dtype, force = dmg:GetDamage() * scale, dmg:GetDamageType(), dmg:GetDamageForce():Length()
-		if IsValid(dmg:GetInflictor()) then inf = dmg:GetInflictor() end
-	end
-	local hit = {}
-	for z in pairs(HZ.Zombies) do
-		if z ~= first and IsValid(z) and not z.hz_dead then
-			local zp = z:GetPos()
-			local rel = Vector(zp.x - base.x, zp.y - base.y, 0)
-			local l = rel:Length()
-			if l > 1 and l <= range and math.abs(zp.z - base.z) < 64 and rel:Dot(aim) / l >= cosA then
-				local tr = util.TraceLine({ start = eye, endpos = z:WorldSpaceCenter(), mask = MASK_SOLID_BRUSHONLY })
-				if not tr.Hit then hit[#hit + 1] = { z, rel } end
-			end
-		end
-	end
-	if #hit == 0 then return end
-	HZ.ArcBusy = true
-	for _, h in ipairs(hit) do
-		local z, rel = h[1], h[2]
-		if amount > 0 then
-			local d = DamageInfo()
-			d:SetDamage(amount)
-			d:SetDamageType(dtype)
-			d:SetAttacker(att)
-			d:SetInflictor(inf)
-			d:SetDamagePosition(z:WorldSpaceCenter())
-			d:SetDamageForce(rel:GetNormalized() * force)
-			z:TakeDamageInfo(d)
-		end
-		if IsValid(z) and not z.hz_dead then z:HZ_ExternalPush(rel, true) end
-	end
-	HZ.ArcBusy = false
-	if HZ.CV.debug:GetBool() then print(("[hordez] melee arc from %s: %d more infected"):format(tostring(att), #hit)) end
+
+function HZ.MeleeArc(attacker, first, dmg)
+    if not HZ.CV.arc:GetBool() or not IsValid(attacker) then return end
+
+    local now = CurTime()
+    if (attacker.hz_arcUntil or 0) > now then return end
+
+    attacker.hz_arcUntil = now + 0.25
+    local aim = attacker:IsPlayer() and attacker:GetAimVector() or attacker:GetForward()
+    aim = Vector(aim.x, aim.y, 0)
+    if aim:LengthSqr() < 0.01 then return end
+
+    aim:Normalize()
+    local base = attacker:GetPos()
+    local eye = attacker.GetShootPos and attacker:GetShootPos() or attacker:WorldSpaceCenter()
+    local range = HZ.CV.arc_range:GetFloat()
+    local cosA = math.cos(math.rad(HZ.CV.arc_angle:GetFloat()))
+    local scale = dmg and HZ.CV.arc_damage:GetFloat() or 0
+    local amount, dtype, inflictor, force = 0, DMG_CLUB, attacker, 0
+    if dmg then
+        amount, dtype, force = dmg:GetDamage() * scale, dmg:GetDamageType(), dmg:GetDamageForce():Length()
+        if IsValid(dmg:GetInflictor()) then inflictor = dmg:GetInflictor() end
+    end
+
+    local hit = {}
+    for zombie in pairs(HZ.Zombies) do
+        if zombie ~= first and IsValid(zombie) and not zombie.hz_dead then
+            local zombiePos = zombie:GetPos()
+            local offset = Vector(zombiePos.x - base.x, zombiePos.y - base.y, 0)
+            local len = offset:Length()
+            if len > 1 and len <= range and math.abs(zombiePos.z - base.z) < 64 and offset:Dot(aim) / len >= cosA then
+                local tr = util.TraceLine({ start = eye, endpos = zombie:WorldSpaceCenter(),
+                    mask = MASK_SOLID_BRUSHONLY })
+
+                if not tr.Hit then hit[#hit + 1] = { zombie, offset } end
+            end
+        end
+    end
+
+    if #hit == 0 then return end
+
+    HZ.ArcBusy = true
+    for _, entry in ipairs(hit) do
+        local zombie, offset = entry[1], entry[2]
+        if amount > 0 then
+            local dmgInfo = DamageInfo()
+            dmgInfo:SetDamage(amount)
+            dmgInfo:SetDamageType(dtype)
+            dmgInfo:SetAttacker(attacker)
+            dmgInfo:SetInflictor(inflictor)
+            dmgInfo:SetDamagePosition(zombie:WorldSpaceCenter())
+            dmgInfo:SetDamageForce(offset:GetNormalized() * force)
+            zombie:TakeDamageInfo(dmgInfo)
+        end
+
+        if IsValid(zombie) and not zombie.hz_dead then zombie:HZ_ExternalPush(offset, true) end
+    end
+
+    HZ.ArcBusy = false
+    if HZ.CV.debug:GetBool() then
+        print(("[hordez] melee arc from %s: %d more infected"):format(tostring(attacker), #hit))
+    end
 end
 
 hook.Add("EntityTakeDamage", "hordez_arc", function(target, dmg)
-	if HZ.ArcBusy or not HZ.Zombies[target] then return end
-	local att = HZ.MeleeAttacker(target, dmg)
-	if att then HZ.MeleeArc(att, target, dmg) end
+    if HZ.ArcBusy or not HZ.Zombies[target] then return end
+
+    local attacker = HZ.MeleeAttacker(target, dmg)
+    if attacker then HZ.MeleeArc(attacker, target, dmg) end
 end)
 
 timer.Create("hordez_stress", 1, 0, function() HZ.Stress = math.max(0, HZ.Stress * 0.93 - 1) end)
 
----------------------------------------------------------------- voices (global budget keeps 60 zombies from screaming at once)
 HZ.Snd = {}
-local function listSnd(dir, sexed)
-	local function grab(d)
-		local out = {}
-		for _, f in ipairs(file.Find("sound/" .. d .. "/*.wav", "GAME")) do
-			-- L4D2's CEDA hazmat suit deflating hiss is for that one uncommon infected, not our citizens
-			if not f:lower():find("ceda", 1, true) then out[#out + 1] = d .. "/" .. f end
-		end
-		return out
-	end
-	if not sexed then return grab(dir) end
-	local root = grab(dir)
-	local m, f = grab(dir .. "/male"), grab(dir .. "/female")
-	for _, s in ipairs(root) do m[#m + 1] = s f[#f + 1] = s end
-	return { male = m, female = f }
-end
-local base = "hordez/infected/"
-HZ.Snd.rage = listSnd(base .. "action/rage", true)
-HZ.Snd.rageat = listSnd(base .. "action/rageat", true)
-HZ.Snd.alert = listSnd(base .. "alert/alert", true)
-HZ.Snd.becomealert = listSnd(base .. "alert/becomealert", true)
-HZ.Snd.enraged = listSnd(base .. "alert/becomeenraged", true)
-HZ.Snd.shot = listSnd(base .. "action/been_shot", true)
-HZ.Snd.die = listSnd(base .. "action/die", true)
-HZ.Snd.ignite = listSnd(base .. "action/ignite", true)
-HZ.Snd.shoved = listSnd(base .. "action/shoved/mp")
-HZ.Snd.hit = listSnd(base .. "hit")
-HZ.Snd.miss = listSnd(base .. "miss")
-HZ.Snd.idle = table.Add(table.Add(listSnd(base .. "idle/moaning"), listSnd(base .. "idle/mumbling")), listSnd(base .. "idle/breathing"))
-for _, s in pairs(HZ.Snd) do
-	if s.male then
-		HZ.PrecacheSounds(s.male)
-		HZ.PrecacheSounds(s.female)
-	else
-		HZ.PrecacheSounds(s)
-	end
+
+local function ListSnd(dir, sexed)
+    local function ListSounds(death)
+        local out = {}
+        for _, fileName in ipairs(file.Find("sound/" .. death .. "/*.wav", "GAME")) do
+            if not fileName:lower():find("ceda", 1, true) then out[#out + 1] = death .. "/" .. fileName end
+        end
+
+        return out
+    end
+
+    if not sexed then return ListSounds(dir) end
+
+    local root = ListSounds(dir)
+    local male, female = ListSounds(dir .. "/male"), ListSounds(dir .. "/female")
+    for _, path in ipairs(root) do
+        male[#male + 1] = path
+        female[#female + 1] = path
+    end
+
+    return { male = male, female = female }
 end
 
-local durCache = {}   -- sound path -> length in seconds (SoundDuration reads the file header)
-local function soundLen(path)
-	local d = durCache[path]
-	if not d then
-		d = SoundDuration(path)
-		d = (d and d > 0) and d or 1
-		durCache[path] = d
-	end
-	return d
+local base = "hordez/infected/"
+HZ.Snd.rage = ListSnd(base .. "action/rage", true)
+HZ.Snd.rageat = ListSnd(base .. "action/rageat", true)
+HZ.Snd.alert = ListSnd(base .. "alert/alert", true)
+HZ.Snd.becomealert = ListSnd(base .. "alert/becomealert", true)
+HZ.Snd.enraged = ListSnd(base .. "alert/becomeenraged", true)
+HZ.Snd.shot = ListSnd(base .. "action/been_shot", true)
+HZ.Snd.die = ListSnd(base .. "action/die", true)
+HZ.Snd.ignite = ListSnd(base .. "action/ignite", true)
+HZ.Snd.shoved = ListSnd(base .. "action/shoved/mp")
+HZ.Snd.hit = ListSnd(base .. "hit")
+HZ.Snd.miss = ListSnd(base .. "miss")
+HZ.Snd.idle = table.Add(table.Add(ListSnd(base .. "idle/moaning"), ListSnd(base .. "idle/mumbling")),
+    ListSnd(base .. "idle/breathing"))
+
+for _, sounds in pairs(HZ.Snd) do
+    if sounds.male then
+        HZ.PrecacheSounds(sounds.male)
+        HZ.PrecacheSounds(sounds.female)
+    else
+        HZ.PrecacheSounds(sounds)
+    end
+end
+
+local durCache = {}
+
+local function SoundLen(path)
+    local dur = durCache[path]
+    if not dur then
+        dur = SoundDuration(path)
+        dur = (dur and dur > 0) and dur or 1
+        durCache[path] = dur
+    end
+
+    return dur
 end
 
 local tokens, lastTok = 0, 0
-function HZ.Voice(z, kind, level, force)
-	local now = CurTime()
-	local rate = HZ.CV.voices:GetFloat()
-	tokens = math.min(rate, tokens + (now - lastTok) * rate)
-	lastTok = now
-	if not force and tokens < 1 then return end
-	if (z.hz_voiceUntil or 0) > now and not force then return end
-	if z.hz_shambler then
-		kind = HZ.ShamblerVoice[kind]
-		if not kind then return end
-	end
-	local s = HZ.Snd[kind]
-	if not s then return end
-	if s.male then s = z.hz_female and s.female or s.male end
-	local path = HZ.Pick(s)
-	if not path then return end
-	tokens = tokens - 1
-	z.hz_voiceUntil = now + (z.hz_shambler and 2.5 or 1.5)
-	local pitch = z.hz_shambler and math.random(84, 94) or math.random(94, 106)
-	z:EmitSound(path, level or 75, pitch, 1, CHAN_VOICE)
-	-- faces (cl_faces.lua): the nearest zombies open their mouths while this plays
-	z:SetNW2Float("hz_yell", now + math.Clamp(soundLen(path) * 100 / pitch, 0.3, 4))
+
+function HZ.Voice(zombie, kind, level, force)
+    local now = CurTime()
+    local rate = HZ.CV.voices:GetFloat()
+    tokens = math.min(rate, tokens + (now - lastTok) * rate)
+    lastTok = now
+    if not force and tokens < 1 then return end
+    if (zombie.hz_voiceUntil or 0) > now and not force then return end
+
+    if zombie.hz_shambler then
+        kind = HZ.ShamblerVoice[kind]
+        if not kind then return end
+    end
+
+    local sounds = HZ.Snd[kind]
+    if not sounds then return end
+
+    if sounds.male then sounds = zombie.hz_female and sounds.female or sounds.male end
+    local path = HZ.Pick(sounds)
+    if not path then return end
+
+    tokens = tokens - 1
+    zombie.hz_voiceUntil = now + (zombie.hz_shambler and 2.5 or 1.5)
+    local pitch = zombie.hz_shambler and math.random(84, 94) or math.random(94, 106)
+    zombie:EmitSound(path, level or 75, pitch, 1, CHAN_VOICE)
+    zombie:SetNW2Float("hz_yell", now + math.Clamp(SoundLen(path) * 100 / pitch, 0.3, 4))
 end
 
--- shamblers: no screams, low moans (nil = stay quiet)
 HZ.ShamblerVoice = { rage = "idle", rageat = "idle", alert = "idle", becomealert = "idle", enraged = nil,
-	shot = "shot", die = "die", ignite = "ignite", shoved = "shoved", idle = "idle" }
+    shot = "shot", die = "die", ignite = "ignite", shoved = "shoved", idle = "idle" }
 
-function HZ.Sound(z, kind, level)
-	local path = HZ.Pick(HZ.Snd[kind])
-	if path then z:EmitSound(path, level or 70, math.random(95, 105), 1, CHAN_AUTO) end
+function HZ.Sound(zombie, kind, level)
+    local path = HZ.Pick(HZ.Snd[kind])
+    if path then zombie:EmitSound(path, level or 70, math.random(95, 105), 1, CHAN_AUTO) end
 end
 
----------------------------------------------------------------- spawning
--- the model list split once: males, females, females with the beanie baked in ("_b")
 local MODELS_M, MODELS_F, MODELS_FB = {}, {}, {}
-for _, m in ipairs(HZ.Models) do
-	local t = MODELS_M
-	if m:find("female", 1, true) then t = m:find("_b.mdl", 1, true) and MODELS_FB or MODELS_F end
-	t[#t + 1] = m
-end
-function HZ.RandomModel()
-	local female = math.random() < HZ.FemaleChance
-	-- the female "_b" models have the beanie baked in, so they share the accessory chance
-	local beanie = female and math.random() < HZ.CV.accessory:GetFloat()
-	return HZ.Pick(female and (beanie and MODELS_FB or MODELS_F) or MODELS_M) or HZ.Models[1]
+for _, model in ipairs(HZ.Models) do
+    local pool = MODELS_M
+    if model:find("female", 1, true) then pool = model:find("_b.mdl", 1, true) and MODELS_FB or MODELS_F end
+    pool[#pool + 1] = model
 end
 
--- torso/legs fully random; accessories (beanie, gloves, glasses) only at hz_accessory_chance.
--- "None" for an accessory group is its empty submodel, or index 0 (bare hands) when it has none.
+function HZ.RandomModel()
+    local female = math.random() < HZ.FemaleChance
+    local beanie = female and math.random() < HZ.CV.accessory:GetFloat()
+
+    return HZ.Pick(female and (beanie and MODELS_FB or MODELS_F) or MODELS_M) or HZ.Models[1]
+end
+
 local ACCESSORY = { beanie = true, beanies = true, glasses = true, hands = true }
--- model -> { { id, num, none, opts } ... }: the body group layout is read once per model (GetBodyGroups
--- builds a table of tables every call), each spawn then only rolls the dice
 local bgCache = {}
-local function bodygroupPlan(ent)
-	local mdl = ent:GetModel()
-	local plan = bgCache[mdl]
-	if plan then return plan end
-	plan = {}
-	for _, bg in ipairs(ent:GetBodyGroups() or {}) do
-		if bg.id ~= 0 and bg.num > 1 then
-			local e = { id = bg.id, num = bg.num }
-			if ACCESSORY[string.lower(bg.name)] then
-				local none = 0
-				for i = 0, bg.num - 1 do
-					if (bg.submodels and bg.submodels[i] or "") == "" then none = i break end
-				end
-				local opts = {}
-				for i = 0, bg.num - 1 do if i ~= none then opts[#opts + 1] = i end end
-				e.none, e.opts = none, opts
-			end
-			plan[#plan + 1] = e
-		end
-	end
-	bgCache[mdl] = plan
-	return plan
+
+local function BodygroupPlan(ent)
+    local mdl = ent:GetModel()
+    local plan = bgCache[mdl]
+    if plan then return plan end
+
+    plan = {}
+    for _, group in ipairs(ent:GetBodyGroups() or {}) do
+        if group.id ~= 0 and group.num > 1 then
+            local entry = { id = group.id, num = group.num }
+            if ACCESSORY[string.lower(group.name)] then
+                local none = 0
+                for i = 0, group.num - 1 do
+                    if (group.submodels and group.submodels[i] or "") == "" then
+                        none = i
+                        break
+                    end
+                end
+
+                local opts = {}
+                for i = 0, group.num - 1 do
+                    if i ~= none then opts[#opts + 1] = i end
+                end
+
+                entry.none, entry.opts = none, opts
+            end
+
+            plan[#plan + 1] = entry
+        end
+    end
+
+    bgCache[mdl] = plan
+
+    return plan
 end
 
 function HZ.RandomBodygroups(ent)
-	local chance = HZ.CV.accessory:GetFloat()
-	local plan = bodygroupPlan(ent)
-	for i = 1, #plan do
-		local bg = plan[i]
-		if bg.opts then
-			local pick = bg.none
-			if math.random() < chance then pick = HZ.Pick(bg.opts) or pick end
-			ent:SetBodygroup(bg.id, pick)
-		else
-			ent:SetBodygroup(bg.id, math.random(0, bg.num - 1))
-		end
-	end
+    local chance = HZ.CV.accessory:GetFloat()
+    local plan = BodygroupPlan(ent)
+    for i = 1, #plan do
+        local group = plan[i]
+        if group.opts then
+            local pick = group.none
+            if math.random() < chance then pick = HZ.Pick(group.opts) or pick end
+            ent:SetBodygroup(group.id, pick)
+        else
+            ent:SetBodygroup(group.id, math.random(0, group.num - 1))
+        end
+    end
 end
 
--- opts: idle ("random"/"stand"/"wander"/"sit"/"lie"/"lean"/"crouch"), alerted (bool), owner (director/spawner)
--- Spawn spot sanity: a zombie placed inside a prop, a wall or a vehicle is stuck for good, so check the
--- body fits (other infected don't count, they pass through each other) and if not, take the nearest spot
--- around it that does - same floor, in sight of the original point, with ground under it. Also settles the
--- spot onto the floor so slopes and spawn markers floating a little don't leave it hanging or buried.
 local FIT_MINS, FIT_MAXS = Vector(-13, -13, 0), Vector(13, 13, 72)
-local notZombie = { "hz_zombie" }   -- class filter, matched in the engine (no Lua call per entity touched)
-local function floorAt(p)
-	local tr = util.TraceLine({ start = p + Vector(0, 0, 24), endpos = p - Vector(0, 0, 64), mask = MASK_NPCSOLID, filter = notZombie })
-	if tr.Hit and not tr.StartSolid and tr.HitNormal.z > 0.6 then return tr.HitPos + Vector(0, 0, 1) end
+local notZombie = { "hz_zombie" }
+
+local function FloorAt(pos)
+    local tr = util.TraceLine({ start = pos + Vector(0, 0, 24), endpos = pos - Vector(0, 0, 64), mask = MASK_NPCSOLID,
+        filter = notZombie })
+
+    if tr.Hit and not tr.StartSolid and tr.HitNormal.z > 0.6 then return tr.HitPos + Vector(0, 0, 1) end
 end
-local function fits(p)
-	local tr = util.TraceHull({ start = p + Vector(0, 0, 2), endpos = p + Vector(0, 0, 3), mins = FIT_MINS, maxs = FIT_MAXS,
-		mask = MASK_NPCSOLID, filter = notZombie })
-	return not tr.Hit and not tr.StartSolid
+
+local function BodyFits(pos)
+    local tr = util.TraceHull({ start = pos + Vector(0, 0, 2), endpos = pos + Vector(0, 0, 3), mins = FIT_MINS,
+        maxs = FIT_MAXS,
+        mask = MASK_NPCSOLID, filter = notZombie })
+
+    return not tr.Hit and not tr.StartSolid
 end
+
 function HZ.FreeSpot(pos)
-	local base = floorAt(pos) or pos
-	if fits(base) then return base end
-	for _, r in ipairs({ 24, 40, 60, 84, 112 }) do
-		local off = math.Rand(0, 360)
-		for k = 0, 7 do
-			local p = base + Angle(0, off + k * 45, 0):Forward() * r
-			local f = floorAt(p)
-			if f and math.abs(f.z - base.z) < 40 and fits(f) then
-				local los = util.TraceLine({ start = base + Vector(0, 0, 36), endpos = f + Vector(0, 0, 36),
-					mask = MASK_NPCSOLID_BRUSHONLY })
-				if not los.Hit then return f end
-			end
-		end
-	end
-	return base   -- nothing better nearby: the stuck check sorts it out once it moves
+    local base = FloorAt(pos) or pos
+    if BodyFits(base) then return base end
+
+    for _, radius in ipairs({ 24, 40, 60, 84, 112 }) do
+        local off = math.Rand(0, 360)
+        for step = 0, 7 do
+            local spot = base + Angle(0, off + step * 45, 0):Forward() * radius
+            local floor = FloorAt(spot)
+            if floor and math.abs(floor.z - base.z) < 40 and BodyFits(floor) then
+                local los = util.TraceLine({ start = base + Vector(0, 0, 36), endpos = floor + Vector(0, 0, 36),
+                    mask = MASK_NPCSOLID_BRUSHONLY })
+
+                if not los.Hit then return floor end
+            end
+        end
+    end
+
+    return base
 end
 
--- (also: model = a body from HZ.Models, force = spawn even at the total cap - a virtual zombie turning real)
 function HZ.SpawnZombie(pos, yaw, opts)
-	opts = opts or {}
-	if not opts.force and not HZ.CanSpawn() then return nil end
-	pos = HZ.FreeSpot(pos)
-	local z = ents.Create("hz_zombie")
-	if not IsValid(z) then return nil end
-	z.hz_model = opts.model
-	z.hz_idleType = opts.idle or "random"
-	z.hz_startAlerted = opts.alerted
-	z.hz_owner = opts.owner
-	z.hz_placed = true   -- spot already checked (HZ.FreeSpot)
-	if opts.shambler == nil then
-		z.hz_shambler = math.random() < HZ.CV.sh_chance:GetFloat()
-	else
-		z.hz_shambler = opts.shambler and true or false
-	end
-	z:SetPos(pos)
-	z:SetAngles(Angle(0, yaw or math.Rand(0, 360), 0))
-	z:Spawn()
-	z:Activate()
-	return z
+    opts = opts or {}
+    if not opts.force and not HZ.CanSpawn() then return nil end
+
+    pos = HZ.FreeSpot(pos)
+    local zombie = ents.Create("hz_zombie")
+    if not IsValid(zombie) then return nil end
+
+    zombie.hz_model = opts.model
+    zombie.hz_idleType = opts.idle or "random"
+    zombie.hz_startAlerted = opts.alerted
+    zombie.hz_owner = opts.owner
+    zombie.hz_placed = true
+    if opts.shambler == nil then
+        zombie.hz_shambler = math.random() < HZ.CV.sh_chance:GetFloat()
+    else
+        zombie.hz_shambler = opts.shambler and true or false
+    end
+
+    zombie:SetPos(pos)
+    zombie:SetAngles(Angle(0, yaw or math.Rand(0, 360), 0))
+    zombie:Spawn()
+    zombie:Activate()
+
+    return zombie
 end
 
--- true when some player can plausibly see the point (in front of them with clear line of sight)
 function HZ.SeenByPlayers(pos, near)
-	near = near or 600
-	local head = pos + Vector(0, 0, 56)
-	for _, t in ipairs(HZ.GetTargets()) do
-		if t.ply then
-			local p = t.ent
-			local eye = p:EyePos()
-			local to = head - eye
-			local d = to:Length()
-			if d < near then return true end
-			if to:GetNormalized():Dot(p:GetAimVector()) > 0.25 then
-				local tr = util.TraceLine({ start = eye, endpos = head, mask = MASK_OPAQUE, filter = p })
-				if not tr.Hit then return true end
-			end
-		end
-	end
-	return false
+    near = near or 600
+    local head = pos + Vector(0, 0, 56)
+    for _, target in ipairs(HZ.GetTargets()) do
+        if target.ply then
+            local ply = target.ent
+            local eye = ply:EyePos()
+            local to = head - eye
+            local dist = to:Length()
+            if dist < near then return true end
+
+            if to:GetNormalized():Dot(ply:GetAimVector()) > 0.25 then
+                local tr = util.TraceLine({ start = eye, endpos = head, mask = MASK_OPAQUE, filter = ply })
+                if not tr.Hit then return true end
+            end
+        end
+    end
+
+    return false
 end
 
--- random hidden, reachable nav area whose path distance to the nearest target is in [minD, maxD]
--- Where each player is heading: their movement over the last few seconds, smoothed (standing still keeps
--- the last heading, so a player who stops to fight still gets zombies "ahead" of their route).
 timer.Create("hordez_heading", 0.5, 0, function()
-	for _, p in ipairs(player.GetAll()) do
-		local pos = p:GetPos()
-		local last = p.hz_hdLast
-		p.hz_hdLast = pos
-		if last then
-			local mv = Vector(pos.x - last.x, pos.y - last.y, 0)
-			if mv:LengthSqr() > 20 * 20 then
-				mv:Normalize()
-				local h = p.hz_heading
-				h = h and (h * 0.6 + mv * 0.4) or mv
-				if h:LengthSqr() > 0.01 then h:Normalize() end
-				p.hz_heading = h
-			end
-		end
-	end
+    for _, ply in ipairs(player.GetAll()) do
+        local pos = ply:GetPos()
+        local last = ply.hz_hdLast
+        ply.hz_hdLast = pos
+        if last then
+            local moved = Vector(pos.x - last.x, pos.y - last.y, 0)
+            if moved:LengthSqr() > 20 * 20 then
+                moved:Normalize()
+                local heading = ply.hz_heading
+                heading = heading and (heading * 0.6 + moved * 0.4) or moved
+                if heading:LengthSqr() > 0.01 then heading:Normalize() end
+                ply.hz_heading = heading
+            end
+        end
+    end
 end)
 
-local function headingOf(p)
-	if p.hz_heading then return p.hz_heading end
-	local a = p:GetAimVector()
-	a.z = 0
-	return a:LengthSqr() > 0.01 and a:GetNormalized() or nil
+local function HeadingOf(pos)
+    if pos.hz_heading then return pos.hz_heading end
+
+    local aim = pos:GetAimVector()
+    aim.z = 0
+
+    return aim:LengthSqr() > 0.01 and aim:GetNormalized() or nil
 end
 
--- how far "ahead" of the nearest player this spot is (-1 behind .. 1 straight ahead)
-local function aheadScore(pos)
-	local best, bd
-	for _, t in ipairs(HZ.GetTargets()) do
-		if t.ply then
-			local d = t.pos:DistToSqr(pos)
-			if not bd or d < bd then best, bd = t, d end
-		end
-	end
-	if not best then return 0 end
-	local h = headingOf(best.ent)
-	if not h then return 0 end
-	local to = Vector(pos.x - best.pos.x, pos.y - best.pos.y, 0)
-	if to:LengthSqr() < 1 then return 0 end
-	return to:GetNormalized():Dot(h)
+local function AheadScore(pos)
+    local best, bestDist
+    for _, target in ipairs(HZ.GetTargets()) do
+        if target.ply then
+            local distSqr = target.pos:DistToSqr(pos)
+            if not bestDist or distSqr < bestDist then best, bestDist = target, distSqr end
+        end
+    end
+
+    if not best then return 0 end
+
+    local heading = HeadingOf(best.ent)
+    if not heading then return 0 end
+
+    local to = Vector(pos.x - best.pos.x, pos.y - best.pos.y, 0)
+    if to:LengthSqr() < 1 then return 0 end
+
+    return to:GetNormalized():Dot(heading)
 end
 
--- A hidden spawn spot minD..maxD path-units from players. With ahead > 0 it gathers several candidates and,
--- that often, takes the one most in front of where players are heading (else a random one).
-function HZ.FindSpawnArea(minD, maxD, tries, ahead)
-	local g = HZ.Flow.graph
-	if not g then return nil end
-	local ids = g.ids
-	tries = tries or 16
-	local want = (ahead and ahead > 0) and 4 or 1
-	local found = {}
-	for _ = 1, tries * want do
-		local id = ids[math.random(#ids)]
-		local d = HZ.Flow.dist[id]
-		local a = g.area[id]
-		if d and d >= minD and d <= maxD and IsValid(a) and not a:IsUnderwater()
-			and a:GetSizeX() >= 24 and a:GetSizeY() >= 24 then
-			local p = a:GetRandomPoint()
-			if not HZ.SeenByPlayers(p, minD * 0.6) then
-				found[#found + 1] = { a, p }
-				if #found >= want then break end
-			end
-		end
-	end
-	if #found == 0 then return nil end
-	local pick = found[math.random(#found)]
-	if want > 1 and math.random() < ahead then
-		local bs
-		for _, f in ipairs(found) do
-			local s = aheadScore(f[2])
-			if not bs or s > bs then pick, bs = f, s end
-		end
-	end
-	return pick[1], pick[2]
+function HZ.FindSpawnArea(minD, maxDistSqr, tries, ahead)
+    local graph = HZ.Flow.graph
+    if not graph then return nil end
+
+    local ids = graph.ids
+    tries = tries or 16
+    local want = (ahead and ahead > 0) and 4 or 1
+    local found = {}
+    for _ = 1, tries * want do
+        local id = ids[math.random(#ids)]
+        local dist = HZ.Flow.dist[id]
+        local area = graph.area[id]
+        if dist and dist >= minD and dist <= maxDistSqr and IsValid(area) and not area:IsUnderwater()
+            and area:GetSizeX() >= 24 and area:GetSizeY() >= 24 then
+                local pos = area:GetRandomPoint()
+                if not HZ.SeenByPlayers(pos, minD * 0.6) then
+                    found[#found + 1] = { area, pos }
+                    if #found >= want then break end
+                end
+            end
+    end
+
+    if #found == 0 then return nil end
+
+    local pick = found[math.random(#found)]
+    if want > 1 and math.random() < ahead then
+        local bestScore
+        for _, entry in ipairs(found) do
+            local score = AheadScore(entry[2])
+            if not bestScore or score > bestScore then pick, bestScore = entry, score end
+        end
+    end
+
+    return pick[1], pick[2]
 end
 
----------------------------------------------------------------- doors
--- A door has health (hz_door_health) that every pounding zombie chips at, so a crowd gets through fast and a
--- lone shambler slowly. Then it breaks: model doors come off their hinges as a loose prop; brush doors
--- (custom map func_door / func_door_rotating, which can't become props) burst into wood or metal debris.
--- Before any door goes, every func_areaportal linked to it is opened for good - a portal left closed with
--- its door gone shows the void behind it (the "areaportal bug" some door-breaking addons cause).
 local WOOD = {
-	hit = { "physics/wood/wood_box_impact_hard1.wav", "physics/wood/wood_box_impact_hard2.wav", "physics/wood/wood_box_impact_hard3.wav" },
-	brk = { "physics/wood/wood_crate_break1.wav", "physics/wood/wood_crate_break2.wav", "physics/wood/wood_crate_break3.wav",
-		"physics/wood/wood_furniture_break1.wav", "physics/wood/wood_furniture_break2.wav", "physics/wood/wood_plank_break1.wav",
-		"physics/wood/wood_plank_break3.wav" },
-	gibs = { "models/gibs/wood_gib01a.mdl", "models/gibs/wood_gib01b.mdl", "models/gibs/wood_gib01c.mdl",
-		"models/gibs/wood_gib01d.mdl", "models/gibs/wood_gib01e.mdl" },
+    hit = { "physics/wood/wood_box_impact_hard1.wav", "physics/wood/wood_box_impact_hard2.wav",
+        "physics/wood/wood_box_impact_hard3.wav" },
+    brk = { "physics/wood/wood_crate_break1.wav", "physics/wood/wood_crate_break2.wav",
+        "physics/wood/wood_crate_break3.wav",
+        "physics/wood/wood_furniture_break1.wav", "physics/wood/wood_furniture_break2.wav",
+        "physics/wood/wood_plank_break1.wav",
+        "physics/wood/wood_plank_break3.wav" },
+    gibs = { "models/gibs/wood_gib01a.mdl", "models/gibs/wood_gib01b.mdl", "models/gibs/wood_gib01c.mdl",
+        "models/gibs/wood_gib01d.mdl", "models/gibs/wood_gib01e.mdl" },
 }
+
 local METAL = {
-	hit = { "physics/metal/metal_box_impact_hard1.wav", "physics/metal/metal_box_impact_hard2.wav", "physics/metal/metal_box_impact_hard3.wav" },
-	brk = { "physics/metal/metal_box_break1.wav", "physics/metal/metal_box_break2.wav" },
-	gibs = { "models/gibs/metal_gib1.mdl", "models/gibs/metal_gib2.mdl", "models/gibs/metal_gib3.mdl",
-		"models/gibs/metal_gib4.mdl", "models/gibs/metal_gib5.mdl" },
+    hit = { "physics/metal/metal_box_impact_hard1.wav", "physics/metal/metal_box_impact_hard2.wav",
+        "physics/metal/metal_box_impact_hard3.wav" },
+    brk = { "physics/metal/metal_box_break1.wav", "physics/metal/metal_box_break2.wav" },
+    gibs = { "models/gibs/metal_gib1.mdl", "models/gibs/metal_gib2.mdl", "models/gibs/metal_gib3.mdl",
+        "models/gibs/metal_gib4.mdl", "models/gibs/metal_gib5.mdl" },
 }
+
 for _, kind in ipairs({ WOOD, METAL }) do
-	for _, m in ipairs(kind.gibs) do HZ.PrecacheModel(m) end
-	HZ.PrecacheSounds(kind.hit)
-	HZ.PrecacheSounds(kind.brk)
+    for _, model in ipairs(kind.gibs) do HZ.PrecacheModel(model) end
+    HZ.PrecacheSounds(kind.hit)
+    HZ.PrecacheSounds(kind.brk)
 end
-local function kindOf(mat) return (mat == MAT_METAL or mat == MAT_GRATE or mat == MAT_VENT) and METAL or WOOD end
+
+local function KindOf(mat)
+    return (mat == MAT_METAL or mat == MAT_GRATE or mat == MAT_VENT) and METAL or WOOD
+end
 
 function HZ.OpenDoorPortals(door)
-	local name = door:GetName()
-	if not name or name == "" then return end
-	for _, ap in ipairs(ents.FindByClass("func_areaportal")) do
-		local kv = ap:GetKeyValues()
-		if kv and kv.target == name then
-			ap:Fire("Open")
-			ap:SetKeyValue("target", "")   -- nothing may close it again
-		end
-	end
+    local name = door:GetName()
+    if not name or name == "" then return end
+
+    for _, portal in ipairs(ents.FindByClass("func_areaportal")) do
+        local keyValues = portal:GetKeyValues()
+        if keyValues and keyValues.target == name then
+            portal:Fire("Open")
+            portal:SetKeyValue("target", "")
+        end
+    end
 end
 
-local function debris(door, kind, dir)
-	local mins, maxs = door:OBBMins(), door:OBBMaxs()
-	for _ = 1, math.random(5, 8) do
-		local g = ents.Create("prop_physics")
-		if not IsValid(g) then break end
-		g:SetModel(HZ.Pick(kind.gibs))
-		g:SetPos(door:LocalToWorld(Vector(math.Rand(mins.x, maxs.x), math.Rand(mins.y, maxs.y), math.Rand(mins.z, maxs.z))))
-		g:SetAngles(AngleRand())
-		g:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
-		g:Spawn()
-		local ph = g:GetPhysicsObject()
-		if IsValid(ph) then
-			ph:Wake()
-			ph:SetVelocity(dir * math.Rand(150, 320) + VectorRand() * 90 + Vector(0, 0, math.Rand(40, 140)))
-			ph:AddAngleVelocity(VectorRand() * 400)
-		end
-		SafeRemoveEntityDelayed(g, math.Rand(15, 25))
-	end
+local function SpawnDebris(door, kind, dir)
+    local mins, maxs = door:OBBMins(), door:OBBMaxs()
+    for _ = 1, math.random(5, 8) do
+        local gib = ents.Create("prop_physics")
+        if not IsValid(gib) then break end
+
+        gib:SetModel(HZ.Pick(kind.gibs))
+        gib:SetPos(door:LocalToWorld(Vector(math.Rand(mins.x, maxs.x), math.Rand(mins.y, maxs.y),
+            math.Rand(mins.z, maxs.z))))
+
+        gib:SetAngles(AngleRand())
+        gib:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+        gib:Spawn()
+        local phys = gib:GetPhysicsObject()
+        if IsValid(phys) then
+            phys:Wake()
+            phys:SetVelocity(dir * math.Rand(150, 320) + VectorRand() * 90 + Vector(0, 0, math.Rand(40, 140)))
+            phys:AddAngleVelocity(VectorRand() * 400)
+        end
+
+        SafeRemoveEntityDelayed(gib, math.Rand(15, 25))
+    end
 end
 
-function HZ.BashDoor(door, z, dir, mat)
-	local kind = kindOf(mat)
-	local hit = HZ.CV.door_hit:GetFloat() * (z.hz_shambler and 0.6 or 1)
-	door.hz_doorHP = (door.hz_doorHP or HZ.CV.door_hp:GetFloat()) - hit
-	door:EmitSound(HZ.Pick(kind.hit), 80, math.random(90, 110))
-	util.ScreenShake(door:WorldSpaceCenter(), 1.5, 8, 0.3, 300)
-	if door.hz_doorHP > 0 then return false end
-	door.hz_doorHP = nil
-	local pos = door:WorldSpaceCenter()
-	HZ.OpenDoorPortals(door)
-	local mdl = door:GetModel()
-	if door:GetClass() == "prop_door_rotating" and mdl and util.IsValidProp(mdl) then
-		local dpos, ang, skin = door:GetPos(), door:GetAngles(), door:GetSkin()
-		local groups = {}
-		for i = 0, door:GetNumBodyGroups() - 1 do groups[i] = door:GetBodygroup(i) end
-		door:Remove()
-		local p = ents.Create("prop_physics")
-		if IsValid(p) then
-			p:SetModel(mdl)
-			p:SetPos(dpos)
-			p:SetAngles(ang)
-			p:SetSkin(skin)
-			for i, v in pairs(groups) do p:SetBodygroup(i, v) end
-			-- a broken-off door is debris: it still falls and lands, but players and zombies walk over and
-			-- through it instead of tripping on it or getting it wedged in a doorway
-			p:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
-			p:Spawn()
-			local ph = p:GetPhysicsObject()
-			if IsValid(ph) then
-				ph:Wake()
-				ph:ApplyForceCenter((dir * 350 + Vector(0, 0, 60)) * ph:GetMass())
-				ph:AddAngleVelocity(VectorRand() * 120)
-			end
-		end
-	else
-		-- brush door (or a model door without physics): it bursts apart
-		debris(door, kind, dir)
-		door:Remove()
-	end
-	sound.Play(HZ.Pick(kind.brk), pos, 85, math.random(90, 105))
-	util.ScreenShake(pos, 4, 12, 0.6, 500)
-	return true
+function HZ.BashDoor(door, zombie, dir, mat)
+    local kind = KindOf(mat)
+    local hit = HZ.CV.door_hit:GetFloat() * (zombie.hz_shambler and 0.6 or 1)
+    door.hz_doorHP = (door.hz_doorHP or HZ.CV.door_hp:GetFloat()) - hit
+    door:EmitSound(HZ.Pick(kind.hit), 80, math.random(90, 110))
+    util.ScreenShake(door:WorldSpaceCenter(), 1.5, 8, 0.3, 300)
+    if door.hz_doorHP > 0 then return false end
+
+    door.hz_doorHP = nil
+    local pos = door:WorldSpaceCenter()
+    HZ.OpenDoorPortals(door)
+    local mdl = door:GetModel()
+    if door:GetClass() == "prop_door_rotating" and mdl and util.IsValidProp(mdl) then
+        local dpos, ang, skin = door:GetPos(), door:GetAngles(), door:GetSkin()
+        local groups = {}
+        for i = 0, door:GetNumBodyGroups() - 1 do groups[i] = door:GetBodygroup(i) end
+        door:Remove()
+        local prop = ents.Create("prop_physics")
+        if IsValid(prop) then
+            prop:SetModel(mdl)
+            prop:SetPos(dpos)
+            prop:SetAngles(ang)
+            prop:SetSkin(skin)
+            for i, value in pairs(groups) do prop:SetBodygroup(i, value) end
+            prop:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+            prop:Spawn()
+            local phys = prop:GetPhysicsObject()
+            if IsValid(phys) then
+                phys:Wake()
+                phys:ApplyForceCenter((dir * 350 + Vector(0, 0, 60)) * phys:GetMass())
+                phys:AddAngleVelocity(VectorRand() * 120)
+            end
+        end
+    else
+        SpawnDebris(door, kind, dir)
+        door:Remove()
+    end
+
+    sound.Play(HZ.Pick(kind.brk), pos, 85, math.random(90, 105))
+    util.ScreenShake(pos, 4, 12, 0.6, 500)
+
+    return true
 end
 
--- a few points around an area (it and its neighbours) for clustered horde spawns
-function HZ.PointsAround(area, n)
-	local pool = { area }
-	for _, b in ipairs(area:GetAdjacentAreas()) do pool[#pool + 1] = b end
-	local out = {}
-	for i = 1, n do out[i] = HZ.Pick(pool):GetRandomPoint() + Vector(0, 0, 4) end
-	return out
+function HZ.PointsAround(area, count)
+    local pool = { area }
+    for _, neighbor in ipairs(area:GetAdjacentAreas()) do pool[#pool + 1] = neighbor end
+    local out = {}
+    for i = 1, count do out[i] = HZ.Pick(pool):GetRandomPoint() + Vector(0, 0, 4) end
+
+    return out
 end
 
----------------------------------------------------------------- commands
-local function admin(ply) return not IsValid(ply) or ply:IsAdmin() end
+local function IsAdmin(ply)
+    return not IsValid(ply) or ply:IsAdmin()
+end
 
 concommand.Add("hz_clear", function(ply)
-	if not admin(ply) then return end
-	timer.Remove("hordez_stress_spawn")
-	for z in pairs(HZ.Zombies) do if IsValid(z) then z:Remove() end end
-	if HZ.ClearVirtual then HZ.ClearVirtual() end
+    if not IsAdmin(ply) then return end
+
+    timer.Remove("hordez_stress_spawn")
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) then zombie:Remove() end
+    end
+
+    if HZ.ClearVirtual then HZ.ClearVirtual() end
 end)
 
 concommand.Add("hz_horde", function(ply)
-	if not admin(ply) then return end
-	local d = HZ.ActiveDirector
-	if IsValid(d) then d:StartHorde() else print("[hordez] no active hz_director") end
+    if not IsAdmin(ply) then return end
+
+    local director = HZ.ActiveDirector
+    if IsValid(director) then
+        director:StartHorde()
+    else
+        print("[hordez] no active hz_director")
+    end
 end)
 
 concommand.Add("hz_alert_all", function(ply)
-	if not admin(ply) then return end
-	for z in pairs(HZ.Zombies) do if IsValid(z) and not z.hz_alerted then z.hz_wakeAt = CurTime() + math.Rand(0, 1) end end
+    if not IsAdmin(ply) then return end
+
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) and not zombie.hz_alerted then zombie.hz_wakeAt = CurTime() + math.Rand(0, 1) end
+    end
 end)
 
 concommand.Add("hz_spawn", function(ply, _, args)
-	if not IsValid(ply) or not ply:IsAdmin() then return end
-	local tr = ply:GetEyeTrace()
-	for _ = 1, math.Clamp(tonumber(args[2]) or 1, 1, 30) do
-		HZ.SpawnZombie(tr.HitPos + Vector(math.Rand(-60, 60), math.Rand(-60, 60), 8), nil, { idle = args[1] or "random" })
-	end
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    local tr = ply:GetEyeTrace()
+    for _ = 1, math.Clamp(tonumber(args[2]) or 1, 1, 30) do
+        HZ.SpawnZombie(tr.HitPos + Vector(math.Rand(-60, 60), math.Rand(-60, 60), 8), nil, { idle = args[1]
+            or "random" })
+    end
 end)
 
--- Stress test: hz_stress [count = 1000] [alerted 0/1 = 1] [radius]
--- Spreads that many infected over the navmesh in a circle around the spot you are looking at (the radius
--- grows with the count unless given), a batch per tick so the spawn itself doesn't freeze
--- the server. Ignores nothing: hz_max_total still caps it (0 = no cap). hz_stress 0 stops a spawn in progress;
--- hz_clear removes them all again.
 local STRESS_BATCH = 20
 concommand.Add("hz_stress", function(ply, _, args)
-	if not IsValid(ply) or not ply:IsAdmin() then return end
-	timer.Remove("hordez_stress_spawn")
-	local want = math.Clamp(math.floor(tonumber(args[1]) or 1000), 0, 4000)
-	if want == 0 then print("[hordez] stress spawn stopped") return end
-	local alerted = (tonumber(args[2]) or 1) ~= 0
-	local me = ply:GetPos()
-	local center = ply:GetEyeTrace().HitPos
-	-- with virtual zombies on (hz_virtual): real ones until hz_real_max is reached, the rest start out virtual
-	-- (sv_virtual.lua then keeps the nearest ones real, wherever the circle is)
-	local virtual = alerted and HZ.VirtualOn and HZ.VirtualOn()
-	local radius = math.Clamp(tonumber(args[3]) or math.sqrt(want) * 60, 300, 12000)
-	if not navmesh.GetNearestNavArea(center, false, radius + 400, false, false) then
-		print("[hordez] hz_stress: no navmesh within " .. math.floor(radius) .. " units of where you are looking (nav_generate, or pass a bigger radius)")
-		return
-	end
-	-- A spot evenly at random inside the circle (sqrt: as many per square unit at the rim as in the middle),
-	-- dropped onto the ground and then onto the navmesh there. Picking random nav areas instead put as many
-	-- zombies on a doorstep-sized area as on a whole lawn, and most of a big area's points outside the circle.
-	local function spot()
-		local a, r = math.Rand(0, math.pi * 2), radius * math.sqrt(math.random())
-		local p = Vector(center.x + math.cos(a) * r, center.y + math.sin(a) * r, center.z)
-		local tr = util.TraceLine({ start = p + Vector(0, 0, 400), endpos = p - Vector(0, 0, 3000), mask = MASK_NPCSOLID_BRUSHONLY })
-		if tr.Hit and not tr.StartSolid then p = tr.HitPos end
-		local area = navmesh.GetNearestNavArea(p, false, 250, false, false)
-		if not area or area:IsUnderwater() then return nil end
-		local q = area:GetClosestPointOnArea(p)
-		-- (no navmesh under that spot - a rooftop, a wall, water: skip it rather than pull it somewhere else)
-		if not q or (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2 > 48 * 48 then return nil end
-		return q
-	end
-	local done, misses, tries, nVirtual = 0, 0, 0, 0
-	local t0 = SysTime()
-	print(("[hordez] stress: spawning %d infected (%s) in a circle of radius %d"):format(want, alerted and "chasing" or "idle", radius))
-	timer.Create("hordez_stress_spawn", 0, 0, function()
-		for _ = 1, STRESS_BATCH do
-			if done >= want then break end
-			local p = spot()
-			tries = tries + 1
-			if tries > want * 30 then
-				timer.Remove("hordez_stress_spawn")
-				print(("[hordez] stress: stopped at %d / %d (hz_max_total reached, or no room in that circle)"):format(done, want))
-				return
-			end
-			if not p then
-				-- (nothing to stand on there: another spot)
-			elseif p:DistToSqr(me) < 200 * 200 and misses < 200 then
-				misses = misses + 1   -- not on top of whoever asked
-			elseif virtual and HZ.Count >= HZ.CV.real_max:GetInt() then
-				if HZ.CanSpawn() and HZ.AddVirtual(p + Vector(0, 0, 4)) then
-					done, nVirtual = done + 1, nVirtual + 1
-				end
-			else
-				local z = HZ.SpawnZombie(p + Vector(0, 0, 4), nil, { idle = "random", alerted = alerted })
-				if not IsValid(z) then
-					timer.Remove("hordez_stress_spawn")
-					print(("[hordez] stress: stopped at %d / %d (hz_max_total or the entity limit reached)"):format(done, want))
-					return
-				end
-				done = done + 1
-			end
-		end
-		if done >= want then
-			timer.Remove("hordez_stress_spawn")
-			print(("[hordez] stress: %d spawned in %.1f s (%d of them virtual), %d real + %d virtual infected alive"):format(done,
-				SysTime() - t0, nVirtual, HZ.Count, HZ.VCount or 0))
-		end
-	end)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    timer.Remove("hordez_stress_spawn")
+    local want = math.Clamp(math.floor(tonumber(args[1]) or 1000), 0, 4000)
+    if want == 0 then
+        print("[hordez] stress spawn stopped")
+        return
+    end
+
+    local alerted = (tonumber(args[2]) or 1) ~= 0
+    local myPos = ply:GetPos()
+    local center = ply:GetEyeTrace().HitPos
+    local virtual = alerted and HZ.VirtualOn and HZ.VirtualOn()
+    local radius = math.Clamp(tonumber(args[3]) or math.sqrt(want) * 60, 300, 12000)
+    if not navmesh.GetNearestNavArea(center, false, radius + 400, false, false) then
+        print("[hordez] hz_stress: no navmesh within " .. math.floor(radius) .. " units of where you are looking (nav_generate, or pass a bigger radius)")
+        return
+    end
+
+    local function RandomSpot()
+        local ang, dist = math.Rand(0, math.pi * 2), radius * math.sqrt(math.random())
+        local pos = Vector(center.x + math.cos(ang) * dist, center.y + math.sin(ang) * dist, center.z)
+        local tr = util.TraceLine({ start = pos + Vector(0, 0, 400), endpos = pos - Vector(0, 0, 3000),
+            mask = MASK_NPCSOLID_BRUSHONLY })
+
+        if tr.Hit and not tr.StartSolid then pos = tr.HitPos end
+        local area = navmesh.GetNearestNavArea(pos, false, 250, false, false)
+        if not area or area:IsUnderwater() then return nil end
+
+        local point = area:GetClosestPointOnArea(pos)
+        if not point or (point.x - pos.x) ^ 2 + (point.y - pos.y) ^ 2 > 48 * 48 then return nil end
+
+        return point
+    end
+
+    local done, misses, tries, nVirtual = 0, 0, 0, 0
+    local t0 = SysTime()
+    print(("[hordez] stress: spawning %d infected (%s) in a circle of radius %d"):format(want, alerted and "chasing"
+        or "idle", radius))
+
+    timer.Create("hordez_stress_spawn", 0, 0, function()
+        for _ = 1, STRESS_BATCH do
+            if done >= want then break end
+
+            local pos = RandomSpot()
+            tries = tries + 1
+            if tries > want * 30 then
+                timer.Remove("hordez_stress_spawn")
+                print(("[hordez] stress: stopped at %d / %d (hz_max_total reached, or no room in that circle)"):format(done, want))
+                return
+            end
+
+            if not pos then
+            elseif pos:DistToSqr(myPos) < 200 * 200 and misses < 200 then
+                misses = misses + 1
+            elseif virtual and HZ.Count >= HZ.CV.real_max:GetInt() then
+                if HZ.CanSpawn() and HZ.AddVirtual(pos + Vector(0, 0, 4)) then
+                    done, nVirtual = done + 1, nVirtual + 1
+                end
+            else
+                local zombie = HZ.SpawnZombie(pos + Vector(0, 0, 4), nil, { idle = "random", alerted = alerted })
+                if not IsValid(zombie) then
+                    timer.Remove("hordez_stress_spawn")
+                    print(("[hordez] stress: stopped at %d / %d (hz_max_total or the entity limit reached)"):format(done, want))
+                    return
+                end
+
+                done = done + 1
+            end
+        end
+
+        if done >= want then
+            timer.Remove("hordez_stress_spawn")
+            print(("[hordez] stress: %d spawned in %.1f s (%d of them virtual), %d real + %d virtual infected alive"):format(done,
+                SysTime() - t0, nVirtual, HZ.Count, HZ.VCount or 0))
+        end
+    end)
 end)
 
 concommand.Add("hz_status", function(ply)
-	if not admin(ply) then return end
-	local alerted = 0
-	for z in pairs(HZ.Zombies) do if z.hz_alerted then alerted = alerted + 1 end end
-	print(("[hordez] zombies %d real + %d virtual (%d alerted) / total cap %d (0 = none) | flow %s areas=%d | stress %.0f"):format(HZ.Count, HZ.VCount or 0, alerted,
-		HZ.CV.max:GetInt(), HZ.Flow.ready and "ready" or "not ready", HZ.Flow.graph and #HZ.Flow.graph.ids or 0, HZ.Stress))
+    if not IsAdmin(ply) then return end
+
+    local alerted = 0
+    for zombie in pairs(HZ.Zombies) do
+        if zombie.hz_alerted then alerted = alerted + 1 end
+    end
+
+    print(("[hordez] zombies %d real + %d virtual (%d alerted) / total cap %d (0 = none) | flow %s areas=%d | stress %.0f"):format(HZ.Count, HZ.VCount or 0, alerted,
+        HZ.CV.max:GetInt(), HZ.Flow.ready and "ready" or "not ready", HZ.Flow.graph and #HZ.Flow.graph.ids
+        or 0, HZ.Stress))
 end)

@@ -1,8 +1,3 @@
-# Blender (headless) step of build_lods.sh: reads reference SMDs, writes decimated copies <name>_lod<N>.smd.
-#   blender -b --python lod_decimate.py -- <ratio1,ratio2,...> <file.smd> [file.smd ...]
-# Own SMD reader / writer (no add-on needed). Vertices are welded by position so the surface decimates as one
-# skin; UVs and bone weights ride along; open borders (neck, wrists, waist) are held in place so the body
-# parts still meet at lower detail.
 import bpy, sys, os
 
 def read_smd(path):
@@ -43,7 +38,6 @@ def build(name, tris):
     me.update()
     for m in mats: me.materials.append(bpy.data.materials.new(m))
     uvl = me.uv_layers.new(name='uv')
-    # from_pydata may drop / reorder nothing for valid tris; map by polygon index
     for p in me.polygons:
         p.material_index = matidx[p.index]
         p.use_smooth = True
@@ -58,7 +52,6 @@ def build(name, tris):
             g = groups.get(b)
             if g is None: g = groups[b] = ob.vertex_groups.new(name=str(b))
             g.add([vi], w, 'REPLACE')
-    # border vertices (edges with one face) are kept: weight 0 in the decimation group
     count = {}
     for p in me.polygons:
         for ek in p.edge_keys: count[ek] = count.get(ek, 0) + 1

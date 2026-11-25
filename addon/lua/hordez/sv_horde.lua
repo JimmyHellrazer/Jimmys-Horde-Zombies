@@ -179,7 +179,7 @@ end
 HZ.FriendlyAllies = HZ.FriendlyAllies or {}
 hook.Add("OnEntityCreated", "hordez_targets", function(ent)
     timer.Simple(0, function()
-        if not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+        if not IsValid(ent) or ent:GetClass() == "hz_zombie" or ent:GetClass() == "npc_bullseye" then return end
         if not (ent:IsNPC() or ent:IsNextBot()) then return end
 
         if HZ.FriendlyNPC[ent:GetClass()] then
@@ -399,9 +399,6 @@ end
 function HZ.KnockedOut(ply)
     if not HZ.CV.ignore_out:GetBool() then return false end
 
-    local organism = ply.organism
-    if istable(organism) and organism.otrub then return true end
-
     return hook.Run("HZ_KnockedOut", ply) == true
 end
 
@@ -411,7 +408,7 @@ function HZ.IsHostile(ent)
         return ent:Alive() and not HZ.IgnoringPlayers() and not ent:IsFlagSet(FL_NOTARGET) and not HZ.KnockedOut(ent)
     end
 
-    return (ent:IsNPC() or ent:IsNextBot()) and ent:Health() > 0
+    return (ent:IsNPC() or ent:IsNextBot()) and ent:Health() > 0 and ent:GetClass() ~= "npc_bullseye"
 end
 
 function HZ.Noise(pos, radius, source)

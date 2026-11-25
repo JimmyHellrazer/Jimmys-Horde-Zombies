@@ -148,7 +148,7 @@ local function ServerPanel(panel)
         ui.Check("Hunt NPCs and NextBots", "hz_target_npcs")
         ui.Check("NPCs fight back", "hz_npc_hostile")
         ui.Check("Ignore knocked out players", "hz_ignore_knocked_out")
-        ui.Note("Z-City unconscious players, or any addon using the HZ_KnockedOut hook")
+        ui.Note("Z-City players who are unconscious or down and unable to get up, or any addon using the HZ_KnockedOut hook")
     end)
 
     Section(panel, "Z-City", false, function(ui)

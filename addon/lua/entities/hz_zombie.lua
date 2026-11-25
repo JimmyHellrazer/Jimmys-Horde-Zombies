@@ -30,7 +30,7 @@ local vector_up = Vector(0, 0, 1)
 local util_TraceHull, util_TraceLine = util.TraceHull, util.TraceLine
 
 local NO_ZOMBIES = { "hz_zombie" }
-local NO_BODIES = { "hz_zombie", "player" }
+local NO_BODIES = { "hz_zombie", "player", "prop_ragdoll" }
 
 local UP20 = Vector(0, 0, 20)
 local traceResult = {}
@@ -1309,7 +1309,7 @@ function ENT:HZ_Brain(now)
     local targetPos = target:GetPos()
     local targetDist = pos:Distance(targetPos)
     local dz = math.abs(targetPos.z - pos.z)
-    if targetDist < 52 and dz < 48 then
+    if targetDist < (self.hz_shambler and 62 or 52) and dz < 48 then
         self:HZ_StartAttack(target)
         return
     end
@@ -1418,7 +1418,7 @@ function ENT:HZ_Brain(now)
         end
     end
 
-    if targetDist < 120 and now > (self.hz_nextSwing or 0) then
+    if targetDist < 120 and not self.hz_shambler and now > (self.hz_nextSwing or 0) then
         local swing = HZ.Pick(self.P.swing)
         local rate = self.hz_shambler and CV.sh_rate:GetFloat() or 1
         if swing then
@@ -2005,7 +2005,7 @@ end
 function ENT:HZ_TryObstacle()
     local pos = self:GetPos() + Vector(0, 0, 40)
     local dir = self:GetForward()
-    local tr = util.TraceLine({ start = pos, endpos = pos + dir * 48, mask = MASK_NPCSOLID, filter = NO_ZOMBIES })
+    local tr = util.TraceLine({ start = pos, endpos = pos + dir * 48, mask = MASK_NPCSOLID, filter = NO_BODIES })
     local ent = tr.Entity
     if not IsValid(ent) or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then return false end
 

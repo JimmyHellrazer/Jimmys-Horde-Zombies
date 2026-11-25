@@ -41,7 +41,7 @@ HZ.CV = {
     think_full  = MakeConVar("hz_think_full", "150",
         "Up to this many live zombies all think at the full rate; above it the ones not right next to a player think proportionally less often (at most 4x)"),
     ignore_out  = MakeConVar("hz_ignore_knocked_out", "1",
-        "Zombies lose interest in knocked out / unconscious players (ZCity, or any addon using the HZ_KnockedOut hook)"),
+        "Zombies lose interest in players who are unconscious or down and unable to get up (Z-City, or any addon using the HZ_KnockedOut hook)"),
     zcity       = MakeConVar("hz_zcity", "1",
         "Z-City damage model support: located wounds and bleeding, mob knockdowns, blood on hit (only does anything when Z-City runs)"),
     zcity_damage = MakeConVar("hz_zcity_damage", "0.7", "Zombie damage multiplier against Z-City players"),

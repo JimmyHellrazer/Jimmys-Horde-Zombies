@@ -83,6 +83,23 @@ function HZ.ZCityHit(zombie, target, dmg)
     TryKnockdown(zombie, target)
 end
 
+hook.Add("HZ_KnockedOut", "hordez_zcity", function(ply)
+    if hg == nil then return end
+
+    local organism = ply.organism
+    if not istable(organism) then return end
+    if organism.otrub or organism.incapacitated then return true end
+    if not IsValid(ply.FakeRagdoll) then return end
+
+    local limits = hg.organism
+    if organism.fake or (organism.blood or 5000) < 2900 or (organism.consciousness or 1) <= 0.4 then return true end
+    if (organism.lleg == 1 and organism.rleg == 1) and (organism.berserk or 0) <= 0.3 then return true end
+    if istable(limits) and limits.fake_spine1 and ((organism.spine1 or 0) >= limits.fake_spine1
+        or (organism.spine2 or 0) >= limits.fake_spine2 or (organism.spine3 or 0) >= limits.fake_spine3) then
+        return true
+    end
+end)
+
 hook.Add("PostEntityTakeDamage", "hordez_zcity_blood", function(ent, dmg, took)
     if not took or not HZ.Zombies[ent] or not CV.zcity:GetBool() or hg == nil then return end
     if ent.bloodColorHitFix == nil or ent:GetBloodColor() ~= DONT_BLEED or not dmg:IsBulletDamage() then return end

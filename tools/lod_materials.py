@@ -4,7 +4,7 @@ import sys
 
 root = sys.argv[1]
 SKIP = re.compile(r"(eyeball|pupil|glint|_lod\d)", re.I)
-HEAVY = re.compile(r'^\s*"?\$(bumpmap|normalmap|phong\w*|rimlight\w*|envmap\w*|normalmapalphaenvmapmask|basemapalphaphongmask|selfillum\w*|detail\w*)"?\b.*$', re.I | re.M)
+HEAVY = re.compile(r'^\s*"?\$(bumpmap|normalmap|phong\w*|rimlight\w*|envmap\w*|normalmapalphaenvmapmask|basemapalphaphongmask|selfillum\w*|detail\w*|halflambert)"?\b.*$', re.I | re.M)
 NOCULL = re.compile(r'^\s*"?\$nocull"?\b.*$', re.I | re.M)
 written = 0
 for folder, _, files in os.walk(root):

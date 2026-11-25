@@ -1,9 +1,4 @@
 "VertexLitGeneric"
 {
 	"$basetexture" "models\bloocobalt\citizens\hands_b"
-	"$halflambert" 1
-
-	"$halflambert" 1
-
-	"$halflambert" "1"
 }

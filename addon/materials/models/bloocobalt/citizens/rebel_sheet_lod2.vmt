@@ -1,6 +1,4 @@
 "VertexLitGeneric"
 {
 	"$basetexture" 		"models\bloocobalt\citizens\rebel_sheet"
-
-	"$halflambert" 1
 }

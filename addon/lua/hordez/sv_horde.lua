@@ -1233,7 +1233,7 @@ concommand.Add("hz_spawn", function(ply, _, args)
     if done < want then timer.Create(timerId, 0.03, 0, Step) end
 end)
 
-local STRESS_BATCH = 20
+local STRESS_BATCH = 250
 local STRESS_REAL_BATCH = 2
 concommand.Add("hz_stress", function(ply, _, args)
     if not IsValid(ply) or not ply:IsAdmin() then return end
@@ -1250,12 +1250,25 @@ concommand.Add("hz_stress", function(ply, _, args)
     local center = ply:GetEyeTrace().HitPos
     local virtual = alerted and HZ.VirtualOn and HZ.VirtualOn()
     local radius = math.Clamp(tonumber(args[3]) or math.sqrt(want) * 60, 300, 12000)
-    if not navmesh.GetNearestNavArea(center, false, radius + 400, false, false) then
+    local rawAreas = navmesh.Find(center, radius, 4000, 4000) or {}
+    local areas = {}
+    for i = 1, #rawAreas do
+        local a = rawAreas[i]
+        if IsValid(a) and not a:IsUnderwater() then areas[#areas + 1] = a end
+    end
+
+    if #areas == 0 and not navmesh.GetNearestNavArea(center, false, radius + 400, false, false) then
         print("[hordez] hz_stress: no navmesh within " .. math.floor(radius) .. " units of where you are looking (nav_generate, or pass a bigger radius)")
         return
     end
 
+    local areaCount = #areas
     local function RandomSpot()
+        if areaCount > 0 then
+            local area = areas[math.random(areaCount)]
+            if IsValid(area) then return area:GetRandomPoint(), area:GetID() end
+        end
+
         local ang, dist = math.Rand(0, math.pi * 2), radius * math.sqrt(math.random())
         local pos = Vector(center.x + math.cos(ang) * dist, center.y + math.sin(ang) * dist, center.z)
         local tr = util.TraceLine({ start = pos + Vector(0, 0, 400), endpos = pos - Vector(0, 0, 3000),
@@ -1268,7 +1281,7 @@ concommand.Add("hz_stress", function(ply, _, args)
         local point = area:GetClosestPointOnArea(pos)
         if not point or (point.x - pos.x) ^ 2 + (point.y - pos.y) ^ 2 > 48 * 48 then return nil end
 
-        return point
+        return point, area:GetID()
     end
 
     local done, misses, tries, nVirtual = 0, 0, 0, 0
@@ -1281,7 +1294,7 @@ concommand.Add("hz_stress", function(ply, _, args)
         for _ = 1, STRESS_BATCH do
             if done >= want then break end
 
-            local pos = RandomSpot()
+            local pos, areaId = RandomSpot()
             tries = tries + 1
             if tries > want * 30 then
                 timer.Remove("hordez_stress_spawn")
@@ -1293,7 +1306,7 @@ concommand.Add("hz_stress", function(ply, _, args)
             elseif pos:DistToSqr(myPos) < 200 * 200 and misses < 200 then
                 misses = misses + 1
             elseif virtual and HZ.Count >= HZ.CV.real_max:GetInt() then
-                if HZ.CanSpawn() and HZ.AddVirtual(pos + Vector(0, 0, 4)) then
+                if HZ.CanSpawn() and HZ.AddVirtual(pos + Vector(0, 0, 4), areaId and { area = areaId } or nil) then
                     done, nVirtual = done + 1, nVirtual + 1
                 end
             else

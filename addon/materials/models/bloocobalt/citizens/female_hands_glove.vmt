@@ -2,6 +2,5 @@
 {
 	"$basetexture" "models\bloocobalt\citizens\female_hands_glove"
     "$bumpmap" "models\bloocobalt\citizens\female_hands_glove_n"
-	"$halflambert" 1
 	"$nocull" 1
 }

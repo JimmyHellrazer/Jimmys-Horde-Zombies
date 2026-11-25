@@ -2,7 +2,6 @@
 {
 	"$basetexture" "models\bloocobalt\citizens\citizen_sheet"
                 "$bumpmap" "models\bloocobalt\citizens\citizen_sheet_normal"
-	"$halflambert" 1
 
 	"$rimlight" "1"
 	"$rimlightexponent" "80"

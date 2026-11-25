@@ -1,6 +1,4 @@
 "VertexLitGeneric"
 {
 	"$basetexture" "models\bloocobalt\citizens\facemaps\chau_facemap"
-
-	"$halflambert" 1
 }

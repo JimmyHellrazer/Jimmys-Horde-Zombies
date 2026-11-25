@@ -2,7 +2,6 @@
 {
 	"$basetexture" "models\bloocobalt\citizens\facemaps\lakeetra_facemap3"
     "$bumpmap"      "models\bloocobalt\citizens\facemaps\lakeetra_facemap_n"
-	"$halflambert" 1
 
 	"$phong" 1
 	"$phongboost" 0.1

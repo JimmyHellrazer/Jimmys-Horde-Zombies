@@ -14,7 +14,7 @@ function HZ.VirtualOn()
 end
 
 local GROUP_MAX, GROUP_RADIUS = 24, 90
-local groups = {}
+local groups, openGroups = {}, {}
 local ownedCount, ownedHorde = {}, {}
 
 function HZ.VirtualOwned(owner)
@@ -178,6 +178,7 @@ local function NewGroup(pos, speed, shambler, area)
         speed = max(speed, 5), shambler = shambler, area = area, count = 0, rows = {}, _pendAdd = true }
 
     groups[id] = group
+    openGroups[id] = group
     pendGroupAdd[#pendGroupAdd + 1] = group
 
     return group
@@ -186,7 +187,7 @@ end
 local function JoinGroup(row, pos, speed, area)
     local now = CurTime()
     local best, bestDist
-    for _, group in pairs(groups) do
+    for _, group in pairs(openGroups) do
         if group.shambler == row.shambler and group.count < GROUP_MAX then
             local x, y, z = PosAt(group, now)
             local dx, dy = pos.x - x, pos.y - y
@@ -205,6 +206,7 @@ local function JoinGroup(row, pos, speed, area)
     row.group, row.ox, row.oy = best, pos.x - x, pos.y - y
     best.rows[row.id] = row
     best.count = best.count + 1
+    if best.count >= GROUP_MAX then openGroups[best.id] = nil end
 
     return true
 end
@@ -261,6 +263,7 @@ local function DropGroup(group)
     if groups[group.id] ~= group then return end
 
     groups[group.id] = nil
+    openGroups[group.id] = nil
     groupIds:Release(group.id)
     if group._pendMove then
         group._pendMove = nil
@@ -292,7 +295,11 @@ local function DropRow(row, killed)
     local group = row.group
     group.rows[row.id] = nil
     group.count = group.count - 1
-    if group.count <= 0 then DropGroup(group) end
+    if group.count <= 0 then
+        DropGroup(group)
+    elseif group.count < GROUP_MAX then
+        openGroups[group.id] = group
+    end
 end
 
 function HZ.DropVirtualOwned(owner)

@@ -2,7 +2,6 @@
 {
 	"$baseTexture" "models\bloocobalt\citizens\female\refugee_sheet"
     	"$bumpmap" "models\bloocobalt\citizens\female\refugee_sheet_n"
-	"$halflambert" 1
 
 	"$phong" "1"
 	"$phongexponent" "30"

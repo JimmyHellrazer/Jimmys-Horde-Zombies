@@ -3,7 +3,6 @@
 	"$basetexture" "models\bloocobalt\citizens\facemaps\cohrt"
     "$bumpmap"     "models\bloocobalt\citizens\facemaps\cohrt_n"
 	"$envmapsphere" 1
-	"$halflambert" 1
 
     "$phong" "1"
 	"$phongexponent" "20"

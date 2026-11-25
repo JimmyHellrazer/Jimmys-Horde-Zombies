@@ -34,6 +34,8 @@ function HZ.NeedFlow()
     if HZ.DirectorActive or (HZ.VCount or 0) > 0 then return true end
 
     local now = CurTime()
+    if now < (HZ.FlowWantedUntil or 0) then return true end
+
     if now < needFlowAt then return needFlow end
 
     needFlowAt = now + 0.25

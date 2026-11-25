@@ -324,6 +324,7 @@ function ENT:Think()
         return true
     end
 
+    HZ.FlowWantedUntil = now + 2
     if HZ.AIDisabled() or not HZ.Flow.ready then
         local dt = 0.25
         if self:GetRunStart() > 0 then self:SetRunStart(self:GetRunStart() + dt) end

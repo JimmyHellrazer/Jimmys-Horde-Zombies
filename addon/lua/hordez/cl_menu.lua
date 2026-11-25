@@ -151,6 +151,13 @@ local function ServerPanel(panel)
         ui.Note("Z-City unconscious players, or any addon using the HZ_KnockedOut hook")
     end)
 
+    Section(panel, "Z-City", false, function(ui)
+        ui.Check("Z-City damage model support", "hz_zcity")
+        ui.Slider("Damage vs Z-City players", "hz_zcity_damage", 0, 2, 2)
+        ui.Check("Mobs and shamblers knock players over", "hz_zcity_knockdown")
+        ui.Note("Hits land on real body parts and cause bleeding like Z-City's own zombies, and shot infected bleed again. Only does anything when Z-City is running")
+    end)
+
     Section(panel, "Director", false, function(ui)
         ui.Slider("Infected Horde size", "hz_horde_count", 1, 100, 0)
         ui.Check("Infected Horde spawns chasing", "hz_horde_alerted")

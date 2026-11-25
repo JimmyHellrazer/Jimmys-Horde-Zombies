@@ -1681,6 +1681,7 @@ function ENT:HZ_TryHit(target, reach)
     dmg:SetDamageType(DMG_SLASH)
     dmg:SetDamagePosition(target:WorldSpaceCenter())
     dmg:SetDamageForce(self:GetForward() * 2000)
+    if HZ.ZCityHit then HZ.ZCityHit(self, target, dmg) end
     target:TakeDamageInfo(dmg)
     HZ.Sound(self, "hit", 72)
     if target:IsPlayer() then target:ViewPunch(Angle(math.Rand(-3, 3), math.Rand(-4, 4), math.Rand(-2, 2))) end

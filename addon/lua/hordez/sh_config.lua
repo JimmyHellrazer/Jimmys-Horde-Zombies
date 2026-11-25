@@ -1,5 +1,5 @@
 HZ = HZ or {}
-HZ.Version = "0.20.5"
+HZ.Version = "0.21.0"
 
 local FLAGS = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
 
@@ -42,6 +42,10 @@ HZ.CV = {
         "Up to this many live zombies all think at the full rate; above it the ones not right next to a player think proportionally less often (at most 4x)"),
     ignore_out  = MakeConVar("hz_ignore_knocked_out", "1",
         "Zombies lose interest in knocked out / unconscious players (ZCity, or any addon using the HZ_KnockedOut hook)"),
+    zcity       = MakeConVar("hz_zcity", "1",
+        "Z-City damage model support: located wounds and bleeding, mob knockdowns, blood on hit (only does anything when Z-City runs)"),
+    zcity_damage = MakeConVar("hz_zcity_damage", "0.7", "Zombie damage multiplier against Z-City players"),
+    zcity_knock = MakeConVar("hz_zcity_knockdown", "1", "Big mobs and shamblers can knock Z-City players over"),
     target_npcs = MakeConVar("hz_target_npcs", "1", "Zombies also hunt NPCs / other NextBots (TIF soldiers etc.)"),
     flow_budget = MakeConVar("hz_flow_budget", "1500", "Nav areas the flow field solves per tick"),
     flow_range  = MakeConVar("hz_flow_range", "9000", "Max path distance the flow field reaches"),

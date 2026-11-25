@@ -16,6 +16,7 @@ if SERVER then
     include("hordez/sv_flow.lua")
     include("hordez/sv_horde.lua")
     include("hordez/sv_virtual.lua")
+    include("hordez/sv_zcity.lua")
 else
     include("hordez/cl_util.lua")
     include("hordez/cl_virtual.lua")

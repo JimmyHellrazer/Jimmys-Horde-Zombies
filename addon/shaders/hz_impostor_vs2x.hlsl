@@ -12,6 +12,7 @@ struct VS_OUTPUT {
 	float4 proj_pos : POSITION;
 	float2 uv       : TEXCOORD0;
 	float4 color    : COLOR0;
+	float  fog      : TEXCOORD1;
 };
 
 #define CELL_U 0.03125
@@ -31,5 +32,6 @@ VS_OUTPUT main(VS_INPUT vert) {
 	o.proj_pos = mul(float4(world_pos, 1), cViewProj);
 	o.uv = float2(vert.vUV.x + frame * CELL_U, vert.vUV.y);
 	o.color = vert.vColor;
+	o.fog = (1.0 - saturate(RangeFog(o.proj_pos.xyz))) * cAmbientCubeX[0].z;
 	return o;
 };

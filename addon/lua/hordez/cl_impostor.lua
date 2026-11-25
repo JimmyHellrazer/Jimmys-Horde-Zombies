@@ -199,7 +199,7 @@ local atan2, floor, cos, sin, min, max = math.atan2, math.floor, math.cos, math.
 local PI = math.pi
 local lightAt = Vector()
 
-local ex, ey, bright, fogOn, fogStart, fogEnd = 0, 0, 127.5, false, 0, 1
+local ex, ey, bright = 0, 0, 127.5
 
 local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist)
     local layer = dist < NEAR_DIST and nearLayer or farLayer
@@ -226,9 +226,6 @@ local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female
         cache.hz_ilr, cache.hz_ilg, cache.hz_ilb = lr, lg, lb
     end
 
-    local fog = 0
-    if fogOn and fogEnd > fogStart then fog = min(max((dist - fogStart) / (fogEnd - fogStart), 0), 1) end
-
     local base = layer.count * STRIDE
     layer.count = layer.count + 1
     quads[base + 1], quads[base + 2], quads[base + 3] = x, y, z
@@ -241,7 +238,7 @@ local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female
     quads[base + 12] = min(cache.hz_ilr * bright, 255)
     quads[base + 13] = min(cache.hz_ilg * bright, 255)
     quads[base + 14] = min(cache.hz_ilb * bright, 255)
-    quads[base + 15] = fog * 255
+    quads[base + 15] = 255
 end
 
 local function GatherQuads(now)
@@ -254,20 +251,6 @@ local function GatherQuads(now)
     ex, ey = eye.x, eye.y
     local ez = eye.z
     bright = cvLight:GetFloat() * 127.5
-    fogOn = cvFog:GetBool() and render.GetFogMode() == MATERIAL_FOG_LINEAR
-    if fogOn then
-        fogStart, fogEnd = render.GetFogDistances()
-        if not fogStart or not fogEnd or fogStart < 0 or fogEnd - fogStart < 64 then fogOn = false end
-    end
-
-    if fogOn then
-        local r, g, b = render.GetFogColor()
-        for _, layer in ipairs(LAYERS) do
-            layer.mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
-            layer.mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
-            layer.mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
-        end
-    end
 
     farLayer.count, nearLayer.count = 0, 0
 
@@ -399,6 +382,18 @@ end
 local carrier
 
 local function ShaderClock(since, clock)
+    local fog = 0
+    local mode = render.GetFogMode()
+    if cvFog:GetBool() and mode ~= MATERIAL_FOG_NONE and mode ~= MATERIAL_FOG_LINEAR_BELOW_FOG_Z then
+        fog = 1
+        local r, g, b = render.GetFogColor()
+        for _, layer in ipairs(LAYERS) do
+            layer.mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
+            layer.mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
+            layer.mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
+        end
+    end
+
     if not IsValid(carrier) then
         carrier = ClientsideModel("models/props_junk/popcan01a.mdl")
         if not IsValid(carrier) then return end
@@ -408,7 +403,7 @@ local function ShaderClock(since, clock)
     end
 
     render.SuppressEngineLighting(true)
-    render.SetModelLighting(0, since, clock, 0)
+    render.SetModelLighting(0, since, clock, fog)
     carrier:DrawModel()
     render.SuppressEngineLighting(false)
 end

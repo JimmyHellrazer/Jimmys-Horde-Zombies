@@ -2231,7 +2231,14 @@ function ENT:OnKilled(dmg)
 
     self.hz_dead = true
     HZ.LastDeath = CurTime()
-    hook.Run("OnNPCKilled", self, dmg:GetAttacker(), dmg:GetInflictor())
+    timer.Simple(0.3, function()
+        if IsValid(self) then self:Remove() end
+    end)
+
+    self:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+    HZ.Unregister(self)
+    local owner = self.hz_owner
+    if IsValid(owner) and owner.HZ_OnZombieDied then owner:HZ_OnZombieDied(self) end
     HZ.Voice(self, "die", 75)
     net.Start("hz_rag")
     net.WriteEntity(self)
@@ -2242,13 +2249,7 @@ function ENT:OnKilled(dmg)
     net.WriteBool(self:IsOnFire() or self.hz_burnDie ~= nil)
     net.SendPVS(self:GetPos())
     self:Extinguish()
-    self:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
-    HZ.Unregister(self)
-    local owner = self.hz_owner
-    if IsValid(owner) and owner.HZ_OnZombieDied then owner:HZ_OnZombieDied(self) end
-    timer.Simple(0.3, function()
-        if IsValid(self) then self:Remove() end
-    end)
+    hook.Run("OnNPCKilled", self, dmg:GetAttacker(), dmg:GetInflictor())
 end
 
 function ENT:OnStuck()

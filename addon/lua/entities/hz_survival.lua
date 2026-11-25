@@ -8,27 +8,36 @@ ENT.Spawnable = true
 ENT.AdminOnly = true
 ENT.Editable = true
 ENT.RenderGroup = RENDERGROUP_BOTH
+ENT.HZ_VirtualOK = true
 
 function ENT:SetupDataTables()
     self:NetworkVar("Bool", 0, "Active", { KeyName = "active", Edit = { type = "Boolean", order = 1 } })
     self:NetworkVar("Bool", 1, "Hell", { KeyName = "hell", Edit = { type = "Boolean", order = 2 } })
     self:NetworkVar("Int", 0, "StartSize",
         { KeyName = "startsize", Edit = { type = "Int", min = 1, max = 200, order = 3 } })
+
     self:NetworkVar("Int", 1, "Growth",
         { KeyName = "growth", Edit = { type = "Int", min = 0, max = 200, order = 4 } })
+
     self:NetworkVar("Int", 2, "BreakTime",
         { KeyName = "breaktime", Edit = { type = "Int", min = 0, max = 300, order = 5 } })
+
     self:NetworkVar("Int", 3, "MaxAlive",
-        { KeyName = "maxalive", Edit = { type = "Int", min = 1, max = 300, order = 6 } })
+        { KeyName = "maxalive", Edit = { type = "Int", min = 1, max = 500, order = 6 } })
+
     self:NetworkVar("String", 0, "Variant",
         { KeyName = "variant", Edit = { type = "Combo", values = HZ.VARIANTS, order = 7 } })
+
     self:NetworkVar("Int", 4, "SpawnMin",
         { KeyName = "spawnmin", Edit = { type = "Int", min = 200, max = 4000, order = 8 } })
+
     self:NetworkVar("Int", 5, "SpawnMax",
         { KeyName = "spawnmax", Edit = { type = "Int", min = 600, max = 8000, order = 9 } })
+
     self:NetworkVar("Bool", 2, "ShowHUD", { KeyName = "showhud", Edit = { type = "Boolean", order = 10 } })
 
     self:NetworkVar("Int", 6, "Wave")
+    self:NetworkVar("Int", 7, "Heat")
     self:NetworkVar("Float", 0, "RunStart")
     self:NetworkVar("Float", 1, "BreakEnd")
 
@@ -62,8 +71,10 @@ if CLIENT then
         cam.Start3D2D(pos, ang, 0.12)
         draw.SimpleTextOutlined("SURVIVAL DIRECTOR", "DermaLarge", 0, 0, Color(255, 40, 40), TEXT_ALIGN_CENTER,
             TEXT_ALIGN_BOTTOM, 2, color_black)
+
         draw.SimpleTextOutlined(text, "DermaLarge", 0, 4, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2,
             color_black)
+
         cam.End3D2D()
     end
 
@@ -85,7 +96,10 @@ if CLIENT then
             nextFind = now + 1
             current = nil
             for _, ent in ipairs(ents.FindByClass("hz_survival")) do
-                if ent:GetActive() and ent:GetRunStart() > 0 then current = ent break end
+                if ent:GetActive() and ent:GetRunStart() > 0 then
+                    current = ent
+                    break
+                end
             end
         end
 
@@ -95,7 +109,8 @@ if CLIENT then
         local x, y = ScrW() - 24, 20
         local red, white = Color(230, 40, 40), Color(235, 235, 235)
         if dir:GetHell() then
-            draw.SimpleTextOutlined("HELL", "hz_surv_big", x, y, red, TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP, 2, color_black)
+            draw.SimpleTextOutlined("HELL " .. math.max(dir:GetHeat(), 1), "hz_surv_big", x, y, red, TEXT_ALIGN_RIGHT,
+                TEXT_ALIGN_TOP, 2, color_black)
         else
             draw.SimpleTextOutlined("WAVE " .. math.max(dir:GetWave(), 1), "hz_surv_big", x, y, red, TEXT_ALIGN_RIGHT,
                 TEXT_ALIGN_TOP, 2, color_black)
@@ -103,6 +118,7 @@ if CLIENT then
 
         draw.SimpleTextOutlined(Clock(now - dir:GetRunStart()), "hz_surv_small", x, y + 38, white, TEXT_ALIGN_RIGHT,
             TEXT_ALIGN_TOP, 2, color_black)
+
         if not dir:GetHell() and dir:GetBreakEnd() > now then
             draw.SimpleTextOutlined("break " .. Clock(dir:GetBreakEnd() - now + 0.99), "hz_surv_small", x, y + 62,
                 Color(170, 170, 170), TEXT_ALIGN_RIGHT, TEXT_ALIGN_TOP, 2, color_black)
@@ -115,6 +131,12 @@ end
 local RESET_DELAY = 6
 local WAVE_SPEEDUP = 0.03
 local HELL_RATE0, HELL_RAMP, HELL_RATE_MAX = 0.6, 0.35, 5
+local HEAT_STEP = 90
+local HEAT_FULL_CROWD = 8
+local HEAT_START_CROWD = 0.25
+local HEAT_CROWD_GROWTH, HEAT_CROWD_MAX = 0.1, 2.5
+local HEAT_HEALTH, HEAT_HEALTH_MAX = 0.02, 0.5
+local SURGE_EVERY, SURGE_EVERY_MIN = 75, 40
 
 function ENT:Initialize()
     self:SetModel("models/props_c17/consolebox01a.mdl")
@@ -141,10 +163,32 @@ function ENT:ClearZombies()
     end
 
     self.owned = {}
+    if HZ.DropVirtualOwned then HZ.DropVirtualOwned(self) end
 end
 
 function ENT:HZ_OnZombieDied(zombie)
     self.owned[zombie] = nil
+end
+
+function ENT:HZ_OnZombieReal(zombie)
+    self.owned[zombie] = true
+end
+
+function ENT:HeatMinutes()
+    if not self.hellMode or self:GetRunStart() <= 0 then return 0 end
+
+    return math.max(CurTime() - self:GetRunStart(), 0) / 60
+end
+
+function ENT:AliveCap()
+    local cap = self:GetMaxAlive()
+    if not self.hellMode then return cap end
+
+    local minutes = self:HeatMinutes()
+    local grown = HEAT_START_CROWD + (1 - HEAT_START_CROWD) * math.min(minutes / HEAT_FULL_CROWD, 1)
+    grown = math.min(grown + math.max(minutes - HEAT_FULL_CROWD, 0) * HEAT_CROWD_GROWTH, HEAT_CROWD_MAX)
+
+    return math.max(math.floor(cap * grown), math.min(cap, 6))
 end
 
 function ENT:AliveCount()
@@ -157,7 +201,7 @@ function ENT:AliveCount()
         end
     end
 
-    return count
+    return count + HZ.VirtualOwned(self)
 end
 
 local function AnyPlayerAlive()
@@ -173,7 +217,8 @@ function ENT:ResetRun()
     self:SetWave(0)
     self:SetRunStart(0)
     self:SetBreakEnd(0)
-    self.waveLeft, self.hellBank, self.deadSince, self.hellMode = 0, 0, nil, nil
+    self:SetHeat(0)
+    self.waveLeft, self.hellBank, self.deadSince, self.hellMode, self.nextSurge = 0, 0, nil, nil, nil
 end
 
 function ENT:StartRun(now)
@@ -182,6 +227,8 @@ function ENT:StartRun(now)
     self:SetRunStart(now)
     if self.hellMode then
         self.hellBank = 2
+        self.nextSurge = now + SURGE_EVERY
+        self:SetHeat(1)
         self:Cue()
     else
         self:SetBreakEnd(now + math.min(self:GetBreakTime(), 10))
@@ -223,21 +270,26 @@ function ENT:SpawnSome(count)
 
     local done = 0
     local speed = 1 + math.min(WAVE_SPEEDUP * math.max(self:GetWave() - 1, 0), 0.3)
-    if self.hellMode then speed = 1 + math.min((CurTime() - self:GetRunStart()) / 60 * 0.02, 0.3) end
+    local health = 1
+    if self.hellMode then
+        local heat = self:HeatMinutes()
+        speed = 1 + math.min(heat * 0.02, 0.3)
+        health = 1 + math.min(heat * HEAT_HEALTH, HEAT_HEALTH_MAX)
+    end
+
+    local cap = self:AliveCap()
     for _ = 1, count do
-        if self:AliveCount() >= self:GetMaxAlive() or not HZ.CanSpawn() then break end
+        if self:AliveCount() >= cap or not HZ.CanSpawn() then break end
 
         local pos = HZ.PointsAround(HZ.Pick(self.sources), 1)[1]
         if not pos then break end
 
-        local zombie = HZ.SpawnZombie(pos, nil,
-            { alerted = true, owner = self, shambler = HZ.VariantShambler(self:GetVariant()) })
-        if not IsValid(zombie) then break end
+        local zombie, row = HZ.SpawnChaser(pos, { owner = self, shambler = HZ.VariantShambler(self:GetVariant()),
+            omni = true, speedScale = speed, healthScale = health })
 
-        zombie.hz_omni = true
-        zombie.hz_speedMul = (zombie.hz_speedMul or 1) * speed
-        if zombie.hz_shamSpeed then zombie.hz_shamSpeed = zombie.hz_shamSpeed * speed end
-        self.owned[zombie] = true
+        if not IsValid(zombie) and not row then break end
+
+        if zombie then self.owned[zombie] = true end
         done = done + 1
     end
 
@@ -299,9 +351,25 @@ function ENT:Think()
     self:Recycle(now)
 
     if self.hellMode then
-        local minutes = (now - self:GetRunStart()) / 60
+        local minutes = self:HeatMinutes()
+        local level = 1 + math.floor(minutes * 60 / HEAT_STEP)
+        if level ~= self:GetHeat() then self:SetHeat(level) end
+
+        local bankMax = 8
+        if now >= (self.nextSurge or 0) then
+            self.nextSurge = now + math.max(SURGE_EVERY - minutes * 2, SURGE_EVERY_MIN)
+            self.surge = 6 + level * 2
+            self:Cue()
+        end
+
+        if (self.surge or 0) > 0 then
+            bankMax = 8 + self.surge
+            self.hellBank = self.hellBank + self.surge
+            self.surge = 0
+        end
+
         local rate = math.min(HELL_RATE0 + HELL_RAMP * minutes, HELL_RATE_MAX)
-        self.hellBank = math.min(self.hellBank + rate * 0.25, 8)
+        self.hellBank = math.min(self.hellBank + rate * 0.25, math.max(bankMax, self.hellBank))
         if self.hellBank >= 1 then
             self.hellBank = self.hellBank - self:SpawnSome(math.floor(self.hellBank))
         end

@@ -8,6 +8,7 @@ ENT.Spawnable = true
 ENT.AdminOnly = true
 ENT.Editable = true
 ENT.RenderGroup = RENDERGROUP_BOTH
+ENT.HZ_VirtualOK = true
 
 function ENT:SetupDataTables()
     self:NetworkVar("Bool", 0, "Active", { KeyName = "active", Edit = { type = "Boolean", order = 1 } })
@@ -36,7 +37,7 @@ function ENT:SetupDataTables()
         { KeyName = "variant", Edit = { type = "Combo", values = HZ.VARIANTS, order = 9 } })
 
     self:NetworkVar("Int", 7, "MaxAlive",
-        { KeyName = "maxalive", Edit = { type = "Int", min = 1, max = 300, order = 10 } })
+        { KeyName = "maxalive", Edit = { type = "Int", min = 1, max = 500, order = 10 } })
 
     if SERVER then
         self:SetActive(true)
@@ -101,10 +102,17 @@ function ENT:OnRemove()
     for zombie in pairs(self.owned or {}) do
         if IsValid(zombie) then zombie:Remove() end
     end
+
+    if HZ.DropVirtualOwned then HZ.DropVirtualOwned(self) end
 end
 
 function ENT:HZ_OnZombieDied(zombie)
     self.owned[zombie] = nil
+end
+
+function ENT:HZ_OnZombieReal(zombie, row)
+    self:Own(zombie, row.horde)
+    if row.horde and self.hordeSpawned then self.hordeSpawned[zombie] = true end
 end
 
 local function RandRange(lo, hi)
@@ -127,7 +135,7 @@ function ENT:CanOwnMore()
         if IsValid(zombie) then count = count + 1 end
     end
 
-    return count < self:GetMaxAlive()
+    return count + HZ.VirtualOwned(self) < self:GetMaxAlive()
 end
 
 function ENT:MaintainAmbient()
@@ -192,13 +200,16 @@ function ENT:SpawnHordeBatch()
 
         local src = HZ.Pick(self.sources)
         local pos = HZ.PointsAround(src, 1)[1]
-        local zombie = HZ.SpawnZombie(pos, nil,
-            { alerted = true, owner = self, shambler = HZ.VariantShambler(self:GetVariant()) })
+        local zombie, row = HZ.SpawnChaser(pos, { owner = self, horde = true,
+            shambler = HZ.VariantShambler(self:GetVariant()) })
 
-        if not IsValid(zombie) then return end
+        if not IsValid(zombie) and not row then return end
 
-        self:Own(zombie, true)
-        self.hordeSpawned[zombie] = true
+        if zombie then
+            self:Own(zombie, true)
+            self.hordeSpawned[zombie] = true
+        end
+
         self.hordeLeft = self.hordeLeft - 1
     end
 end
@@ -262,7 +273,7 @@ function ENT:Think()
         if now >= self:GetNextHorde() and self:GetHordeSize() > 0 then self:StartHorde() end
     elseif self.phase == "peak" then
         self:SpawnHordeBatch()
-        local alive = 0
+        local alive = HZ.VirtualOwnedHorde(self)
         for zombie in pairs(self.hordeSpawned) do
             if IsValid(zombie) and HZ.Zombies[zombie] then
                 alive = alive + 1

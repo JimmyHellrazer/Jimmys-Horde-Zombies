@@ -124,7 +124,8 @@ function HZ.AddVirtual(pos, opts)
     local now = CurTime()
     local row = { id = id, x = pos.x, y = pos.y, z = pos.z, wx = pos.x, wy = pos.y, wz = pos.z, t0 = now, t1 = now,
         speed = max(speed, 5), shambler = shambler and true or false, model = model,
-        female = model:find("female", 1, true) ~= nil, hp = opts.hp or 1, area = opts.area }
+        female = model:find("female", 1, true) ~= nil, hp = opts.hp or 1, area = opts.area, born = now,
+        hz_cover = opts.cover }
 
     rows[id] = row
     HZ.VCount = HZ.VCount + 1
@@ -259,6 +260,8 @@ local function PromoteRow(row, x, y, z)
 
     if row.hp < 1 then ent:SetHealth(max(1, floor(ent:GetMaxHealth() * row.hp))) end
     ent.hz_wasVirtual = true
+    ent.hz_promotedAt = CurTime()
+    ent.hz_cover = row.hz_cover
     DropRow(row, false)
 
     return true
@@ -269,6 +272,7 @@ local function Demotable(zombie)
         and (zombie.hz_alerted
         or (zombie.hz_wasVirtual and not zombie.hz_wakeAt
         and (zombie.hz_pose == "wander" or zombie.hz_pose == "stand")))
+        and CurTime() - (zombie.hz_promotedAt or 0) > 4
         and not zombie.hz_dead and not IsValid(zombie.hz_owner) and not zombie.hz_inOnce and not zombie.hz_climbing
         and not zombie.hz_attacking and not zombie.hz_burnDie and not zombie.hz_shove and not zombie:IsOnFire()
         and zombie.loco:IsOnGround()
@@ -282,7 +286,7 @@ local function DemoteZombie(zombie, pos)
     local row = HZ.AddVirtual(pos, { area = id, model = zombie:GetModel(), shambler = zombie.hz_shambler and true
         or false,
         speed = zombie.hz_shambler and zombie.hz_shamSpeed or CV.runspeed:GetFloat() * (zombie.hz_speedMul or 1),
-        hp = math.Clamp(zombie:Health() / max(zombie:GetMaxHealth(), 1), 0.05, 1) })
+        hp = math.Clamp(zombie:Health() / max(zombie:GetMaxHealth(), 1), 0.05, 1), cover = zombie.hz_cover })
 
     if not row then return false end
 
@@ -321,6 +325,100 @@ local function NearestTarget2(targets, targetCount, pos)
     return best
 end
 
+local COVER_CELLS, COVER_RANGE = 360, 2500
+local COVER_RAD = 2 * math.pi / COVER_CELLS
+local coverCells = {}
+local coverRefs, coverX, coverY, coverZ, coverDist, coverOrder = {}, {}, {}, {}, {}, {}
+
+local function CoverNearer(a, b)
+    return coverDist[a] < coverDist[b]
+end
+
+local function CoverFor(eye, now)
+    local count = 0
+    local ex, ey, ez = eye.x, eye.y, eye.z
+    local rangeSqr = COVER_RANGE * COVER_RANGE
+
+    local function Add(ref, x, y, z)
+        local dx, dy = x - ex, y - ey
+        local distSqr = dx * dx + dy * dy
+        if distSqr > rangeSqr then return end
+
+        count = count + 1
+        coverRefs[count], coverX[count], coverY[count], coverZ[count] = ref, dx, dy, z + 36 - ez
+        coverDist[count], coverOrder[count] = sqrt(distSqr), count
+    end
+
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) and not zombie.hz_dead then
+            local pos = zombie:GetPos()
+            Add(zombie, pos.x, pos.y, pos.z)
+        end
+    end
+
+    for _, row in pairs(rows) do
+        Add(row, PosAt(row, now))
+    end
+
+    for i = #coverOrder, count + 1, -1 do coverOrder[i] = nil end
+    table.sort(coverOrder, CoverNearer)
+    for i = 0, COVER_CELLS - 1 do coverCells[i] = 0 end
+
+    for k = 1, count do
+        local i = coverOrder[k]
+        local dist = coverDist[i]
+        local cover = 0
+        if dist > 1 then
+            local mid = floor((math.atan2(coverY[i], coverX[i]) + math.pi) / COVER_RAD)
+            local half = min(math.ceil(math.atan(14 / dist) / COVER_RAD), 30)
+            local steep = coverZ[i] > dist * 0.4 or coverZ[i] < -dist * 0.4
+            if not steep then
+                local sum = 0
+                for cell = mid - half, mid + half do sum = sum + coverCells[cell % COVER_CELLS] end
+                cover = sum / (half * 2 + 1)
+            end
+
+            for cell = mid - half, mid + half do
+                local index = cell % COVER_CELLS
+                coverCells[index] = coverCells[index] + 1
+            end
+        end
+
+        local ref = coverRefs[i]
+        if not ref.hz_coverNow or cover < ref.hz_coverNow then ref.hz_coverNow = cover end
+        coverRefs[i] = nil
+    end
+end
+
+local function CoverPass()
+    local now = CurTime()
+    for zombie in pairs(HZ.Zombies) do zombie.hz_coverNow = nil end
+    for _, row in pairs(rows) do row.hz_coverNow = nil end
+
+    for _, ply in ipairs(player.GetAll()) do CoverFor(ply:EyePos(), now) end
+
+    for zombie in pairs(HZ.Zombies) do
+        zombie.hz_cover = ((zombie.hz_cover or 0) + (zombie.hz_coverNow or 0)) * 0.5
+    end
+
+    for _, row in pairs(rows) do
+        row.hz_cover = ((row.hz_cover or 0) + (row.hz_coverNow or 0)) * 0.5
+    end
+end
+
+local function CoverScale(ref)
+    local factor = 1 + 0.75 * min(ref.hz_cover or 0, 8)
+
+    return factor * factor
+end
+
+timer.Create("hordez_virtual_cover", 1, 0, function()
+    if not HZ.VirtualOn() or HZ.AIDisabled() then return end
+    if HZ.VCount == 0 and HZ.Count <= CV.real_max:GetInt() then return end
+
+    CoverPass()
+end)
+
 local PROMOTE_PER_PASS = 5
 local SWAP_PER_PASS = 6
 local waiting = {}
@@ -342,13 +440,14 @@ local function TradePlaces(count, targets, targetCount, cap)
         if rows[row.id] ~= row then break end
 
         local done = false
-        if wait.d2 < 1500 * 1500 then
+        if wait.d2 < 1500 * 1500 and CurTime() - row.born > 3 then
             if not reals then
                 reals = {}
                 for zombie in pairs(HZ.Zombies) do
                     if Demotable(zombie) then
                         local pos = zombie:GetPos()
-                        reals[#reals + 1] = { z = zombie, pos = pos, d2 = NearestTarget2(targets, targetCount, pos) }
+                        reals[#reals + 1] = { z = zombie, pos = pos,
+                            d2 = NearestTarget2(targets, targetCount, pos) * CoverScale(zombie) }
                     end
                 end
 
@@ -405,8 +504,9 @@ timer.Create("hordez_virtual", 0.25, 0, function()
                     waiting[waitCount] = wait
                 end
 
-                wait.r, wait.d2, wait.x, wait.y, wait.z = row, best, x, y, z
-                if best < (300 + (row.id % 16) * 25) ^ 2 then
+                wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(row), x, y, z
+                local stop = max((300 + (row.id % 16) * 25) / (1 + (row.hz_cover or 0)), 90)
+                if best < stop * stop then
                     if not row.hold then HaltRow(row, now, x, y, z) end
                     walks = false
                 end
@@ -450,8 +550,9 @@ timer.Create("hordez_virtual_demote", 1, 0, function()
 
         if Demotable(zombie) then
             local pos = zombie:GetPos()
-            local best = NearestTarget2(targets, targetCount, pos)
-            if (best > always2 or (best > farSqr and real > cap)) and DemoteZombie(zombie, pos) then
+            local raw = NearestTarget2(targets, targetCount, pos)
+            local best = raw * CoverScale(zombie)
+            if (raw > always2 or (best > farSqr and real > cap)) and DemoteZombie(zombie, pos) then
                 real, done = real - 1, done + 1
             end
         end

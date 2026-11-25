@@ -11,10 +11,8 @@ local cvFog = CreateClientConVar("hz_impostor_fog", "1", true, false, "Fade impo
 local cvDebug = CreateClientConVar("hz_impostor_debug", "0", false, false,
     "Show the impostor atlas and count on screen")
 
-local ATLAS = 1024
-local CELL_W, CELL_H = 32, 64
-local DU, DV = CELL_W / ATLAS, CELL_H / ATLAS
-local INSET = 0.5 / ATLAS
+local DU, DV = 1 / 32, 1 / 16
+local NEAR_DIST = 1200
 local HALF_W, Z_LO, Z_HI = 24, -8, 88
 local MAX_QUADS = 6000
 local REBUILD = 0.25
@@ -33,10 +31,17 @@ local VARIANTS = {
 
 local rates = {}
 
-local atlasRT = GetRenderTargetEx("hz_impostor_atlas", ATLAS, ATLAS, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, 0, 0,
-    IMAGE_FORMAT_RGBA8888)
+local function Layer(size, name, material)
+    return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = Material(material),
+        rt = GetRenderTargetEx(name, size, size, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, 0, 0,
+        IMAGE_FORMAT_RGBA8888),
+        quads = {}, count = 0 }
+end
 
-local mat = Material("hordez/impostor")
+local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor")
+local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near")
+local LAYERS = { farLayer, nearLayer }
+local atlasRT = nearLayer.rt
 local dbgMat = CreateMaterial("hz_impostor_dbg", "UnlitGeneric",
     { ["$basetexture"] = atlasRT:GetName(), ["$translucent"] = 1 })
 
@@ -98,7 +103,7 @@ end
 
 local camView = { type = "3D",
     ortho = { left = -HALF_W, right = HALF_W, top = -(Z_HI - Z_LO) / 2, bottom = (Z_HI - Z_LO) / 2 },
-    znear = 1, zfar = 600, w = CELL_W, h = CELL_H }
+    znear = 1, zfar = 600 }
 
 local function BakeVariant(i)
     local variant = VARIANTS[i]
@@ -121,37 +126,40 @@ local function BakeVariant(i)
     standIn:SetPos(at)
     standIn:SetAngles(angle_zero)
 
-    render.PushRenderTarget(atlasRT)
-    if i == 1 then render.Clear(0, 0, 0, 0, true, true) end
-    render.SuppressEngineLighting(true)
-    render.SetLocalModelLights({})
-    render.ResetModelLighting(0.78, 0.78, 0.78)
-    render.SetModelLighting(BOX_TOP, 1, 1, 1)
-    render.SetModelLighting(BOX_BOTTOM, 0.45, 0.45, 0.45)
-    render.SetColorModulation(1, 1, 1)
-    render.SetBlend(1)
-    render.OverrideAlphaWriteEnable(true, true)
-    render.SetWriteDepthToDestAlpha(false)
-    for frame = 0, 7 do
-        standIn:SetCycle(frame / 8)
-        standIn:InvalidateBoneCache()
-        standIn:SetupBones()
-        for view = 0, 7 do
-            local ang = math.rad(view * 45)
-            camView.origin = center + Vector(math.cos(ang), math.sin(ang), 0) * 300
-            camView.angles = Angle(0, view * 45 + 180, 0)
-            camView.x = ((view % 4) * 8 + frame) * CELL_W
-            camView.y = ((i - 1) * 2 + (view >= 4 and 1 or 0)) * CELL_H
-            cam.Start(camView)
-            render.FogMode(MATERIAL_FOG_NONE)
-            standIn:DrawModel()
-            cam.End3D()
+    for _, layer in ipairs(LAYERS) do
+        camView.w, camView.h = layer.cellW, layer.cellH
+        render.PushRenderTarget(layer.rt)
+        if i == 1 then render.Clear(0, 0, 0, 0, true, true) end
+        render.SuppressEngineLighting(true)
+        render.SetLocalModelLights({})
+        render.ResetModelLighting(0.78, 0.78, 0.78)
+        render.SetModelLighting(BOX_TOP, 1, 1, 1)
+        render.SetModelLighting(BOX_BOTTOM, 0.45, 0.45, 0.45)
+        render.SetColorModulation(1, 1, 1)
+        render.SetBlend(1)
+        render.OverrideAlphaWriteEnable(true, true)
+        render.SetWriteDepthToDestAlpha(false)
+        for frame = 0, 7 do
+            standIn:SetCycle(frame / 8)
+            standIn:InvalidateBoneCache()
+            standIn:SetupBones()
+            for view = 0, 7 do
+                local ang = math.rad(view * 45)
+                camView.origin = center + Vector(math.cos(ang), math.sin(ang), 0) * 300
+                camView.angles = Angle(0, view * 45 + 180, 0)
+                camView.x = ((view % 4) * 8 + frame) * layer.cellW
+                camView.y = ((i - 1) * 2 + (view >= 4 and 1 or 0)) * layer.cellH
+                cam.Start(camView)
+                render.FogMode(MATERIAL_FOG_NONE)
+                standIn:DrawModel()
+                cam.End3D()
+            end
         end
-    end
 
-    render.OverrideAlphaWriteEnable(false)
-    render.SuppressEngineLighting(false)
-    render.PopRenderTarget()
+        render.OverrideAlphaWriteEnable(false)
+        render.SuppressEngineLighting(false)
+        render.PopRenderTarget()
+    end
 end
 
 hook.Add("PostRender", "hordez_impostor_bake", function()
@@ -172,7 +180,7 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
         end
 
         bakeModels = {}
-        mat:SetTexture("$basetexture", atlasRT)
+        for _, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", layer.rt) end
         ready = true
     end
 end)
@@ -183,10 +191,8 @@ end)
 
 concommand.Add("hz_impostor_rebake", StartBake)
 
-local imesh
 local count = 0
 local builtAt, nextBuild = 0, 0
-local quads = {}
 local STRIDE = 15
 
 local atan2, floor, cos, sin, min, max = math.atan2, math.floor, math.cos, math.sin, math.min, math.max
@@ -195,7 +201,9 @@ local lightAt = Vector()
 
 local ex, ey, bright, fogOn, fogStart, fogEnd = 0, 0, 127.5, false, 0, 1
 
-local function EmitQuad(index, cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist)
+local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist)
+    local layer = dist < NEAR_DIST and nearLayer or farLayer
+    local quads = layer.quads
     local variant
     if not moving then
         variant = female and V_IDLE_F or V_IDLE_M
@@ -221,7 +229,8 @@ local function EmitQuad(index, cache, now, x, y, z, vx, vy, moving, facing, idx,
     local fog = 0
     if fogOn and fogEnd > fogStart then fog = min(max((dist - fogStart) / (fogEnd - fogStart), 0), 1) end
 
-    local base = index * STRIDE
+    local base = layer.count * STRIDE
+    layer.count = layer.count + 1
     quads[base + 1], quads[base + 2], quads[base + 3] = x, y, z
     quads[base + 4], quads[base + 5] = -sin(bearing) * HALF_W, cos(bearing) * HALF_W
     quads[base + 6] = ((view % 4) * 8) * DU
@@ -253,10 +262,14 @@ local function GatherQuads(now)
 
     if fogOn then
         local r, g, b = render.GetFogColor()
-        mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
-        mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
-        mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
+        for _, layer in ipairs(LAYERS) do
+            layer.mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
+            layer.mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
+            layer.mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
+        end
     end
+
+    farLayer.count, nearLayer.count = 0, 0
 
     for i = 1, #list do
         local ent = list[i]
@@ -286,7 +299,7 @@ local function GatherQuads(now)
                     ent.hz_ifem = female
                 end
 
-                EmitQuad(count, ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
+                EmitQuad(ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
                     or ent:GetAngles().y * (PI / 180),
                     ent:EntIndex(), female, ent:GetNW2Bool("hz_shambler"), distSqr ^ 0.5)
 
@@ -303,7 +316,7 @@ local function GatherQuads(now)
             local x, y, z = posAt(row, now)
             local moving = now < row.t1
             local dx, dy, dz = x - ex, y - ey, z - ez
-            EmitQuad(count, row, now, x, y, z, moving and row.vx or 0, moving and row.vy
+            EmitQuad(row, now, x, y, z, moving and row.vx or 0, moving and row.vy
                 or 0, moving, row.yaw, id, row.female, row.shambler,
                 (dx * dx + dy * dy + dz * dz) ^ 0.5)
 
@@ -316,12 +329,13 @@ end
 
 local Position, TexCoord, Color, AdvanceVertex = mesh.Position, mesh.TexCoord, mesh.Color, mesh.AdvanceVertex
 
-local function FillMesh(count)
-    for i = 0, count - 1 do
+local function FillMesh(layer)
+    local quads, inset = layer.quads, layer.inset
+    for i = 0, layer.count - 1 do
         local base = i * STRIDE
         local x, y, z, rx, ry = quads[base + 1], quads[base + 2], quads[base + 3], quads[base + 4], quads[base + 5]
-        local u0, v0 = quads[base + 6] + INSET, quads[base + 7] + INSET
-        local u1, v1 = quads[base + 6] + DU - INSET, quads[base + 7] + DV - INSET
+        local u0, v0 = quads[base + 6] + inset, quads[base + 7] + inset
+        local u1, v1 = quads[base + 6] + DU - inset, quads[base + 7] + DV - inset
         local vx, vy, phase, rate = quads[base + 8], quads[base + 9], quads[base + 10], quads[base + 11]
         local r, g, b, a = quads[base + 12], quads[base + 13], quads[base + 14], quads[base + 15]
         Position(x - rx, y - ry, z + Z_HI)
@@ -356,24 +370,27 @@ local function RebuildMesh(now)
     if not ok then
         ErrorNoHalt("[hordez] impostor rebuild failed: " .. tostring(quadCount) .. "\n")
         quadCount = 0
-    end
-
-    if imesh then
-        imesh:Destroy()
-        imesh = nil
+        farLayer.count, nearLayer.count = 0, 0
     end
 
     count = quadCount
-    if quadCount == 0 then return end
+    for _, layer in ipairs(LAYERS) do
+        if layer.imesh then
+            layer.imesh:Destroy()
+            layer.imesh = nil
+        end
 
-    imesh = Mesh(mat)
-    mesh.Begin(imesh, MATERIAL_QUADS, quadCount)
-    local filled, err = pcall(FillMesh, quadCount)
-    mesh.End()
-    if not filled then
-        ErrorNoHalt("[hordez] impostor mesh failed: " .. tostring(err) .. "\n")
-        imesh:Destroy()
-        imesh, count = nil, 0
+        if layer.count > 0 then
+            layer.imesh = Mesh(layer.mat)
+            mesh.Begin(layer.imesh, MATERIAL_QUADS, layer.count)
+            local filled, err = pcall(FillMesh, layer)
+            mesh.End()
+            if not filled then
+                ErrorNoHalt("[hordez] impostor mesh failed: " .. tostring(err) .. "\n")
+                layer.imesh:Destroy()
+                layer.imesh = nil
+            end
+        end
     end
 
     builtAt = now
@@ -409,12 +426,17 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
         RebuildMesh(now)
     end
 
-    if not imesh then return end
+    if not farLayer.imesh and not nearLayer.imesh then return end
 
     ShaderClock(now - builtAt, now % 4096)
-    render.SetMaterial(mat)
     render.OverrideDepthEnable(true, true)
-    imesh:Draw()
+    for _, layer in ipairs(LAYERS) do
+        if layer.imesh then
+            render.SetMaterial(layer.mat)
+            layer.imesh:Draw()
+        end
+    end
+
     render.OverrideDepthEnable(false, false)
 end)
 
@@ -432,6 +454,10 @@ hook.Add("HUDPaint", "hordez_impostor_debug", function()
 end)
 
 hook.Add("PostCleanupMap", "hordez_impostors", function()
-    if imesh then imesh:Destroy() end
-    imesh, count = nil, 0
+    for _, layer in ipairs(LAYERS) do
+        if layer.imesh then layer.imesh:Destroy() end
+        layer.imesh, layer.count = nil, 0
+    end
+
+    count = 0
 end)

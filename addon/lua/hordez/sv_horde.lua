@@ -434,18 +434,25 @@ hook.Add("EntityFireBullets", "hordez_hear", function(ent)
     HZ.Noise(ent:GetPos(), HZ.CV.hear_gun:GetFloat(), ent)
 end)
 
+function HZ.BulletSpread(spread)
+    if isnumber(spread) then return spread end
+    if isvector(spread) then return math.max(spread.x, spread.y) end
+
+    return 0
+end
+
 HZ.LastDeath = HZ.LastDeath or -1000
 hook.Add("EntityFireBullets", "hordez_corpses", function(ent, data)
     if CurTime() - HZ.LastDeath > 30 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+    if not isvector(data.Src) or not isvector(data.Dir) then return end
 
-    local count = math.Clamp(data.Num or 1, 1, 32)
-    local spread = data.Spread or vector_origin
+    local count = math.Clamp(tonumber(data.Num) or 1, 1, 32)
     net.Start("hz_shot", true)
     net.WriteVector(data.Src)
     net.WriteNormal(data.Dir:GetNormalized())
     net.WriteUInt(count, 5)
-    net.WriteFloat(math.max(spread.x, spread.y))
-    net.WriteUInt(math.Clamp(math.floor(data.Damage or 10), 0, 1023), 10)
+    net.WriteFloat(HZ.BulletSpread(data.Spread))
+    net.WriteUInt(math.Clamp(math.floor(tonumber(data.Damage) or 10), 0, 1023), 10)
     net.SendPVS(data.Src)
 end)
 

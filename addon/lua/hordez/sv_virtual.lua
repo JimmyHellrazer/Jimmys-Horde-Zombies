@@ -772,7 +772,7 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     if HZ.VCount == 0 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
 
     local src, dir = data.Src, data.Dir
-    if not src or not dir then return end
+    if not isvector(src) or not isvector(dir) then return end
 
     dir = dir:GetNormalized()
     shotIn.start, shotIn.endpos, shotIn.filter = src, src + dir * (data.Distance and data.Distance > 0 and data.Distance
@@ -781,7 +781,7 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     util.TraceLine(shotIn)
     local len = shotTr.HitPos:Distance(src)
     local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
-    local spread = data.Spread and max(data.Spread.x, data.Spread.y) or 0
+    local spread = HZ.BulletSpread(data.Spread)
     local count = max(data.Num or 1, 1)
     local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
     local now = CurTime()

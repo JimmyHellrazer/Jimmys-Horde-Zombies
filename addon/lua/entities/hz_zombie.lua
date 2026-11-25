@@ -30,6 +30,7 @@ local vector_up = Vector(0, 0, 1)
 local util_TraceHull, util_TraceLine = util.TraceHull, util.TraceLine
 
 local NO_ZOMBIES = { "hz_zombie" }
+local NO_BODIES = { "hz_zombie", "player" }
 
 local UP20 = Vector(0, 0, 20)
 local traceResult = {}
@@ -1803,7 +1804,7 @@ end
 local PROBES = { 30, 45, 60, 75, 90 }
 
 function ENT:HZ_TryClimb(toward)
-    local filter = NO_ZOMBIES
+    local filter = NO_BODIES
     local pos = self:GetPos()
     local goal = toward or self.hz_goal
     if not goal then return false end
@@ -1878,7 +1879,7 @@ local VAULT_MIN, VAULT_MAX = 18, 62
 function ENT:HZ_TryVault(toward)
     if not CV.climb:GetBool() then return false end
 
-    local filter = NO_ZOMBIES
+    local filter = NO_BODIES
     local pos = self:GetPos()
     local goal = toward or self.hz_goal
     if not goal or goal.z > pos.z + 40 then return false end

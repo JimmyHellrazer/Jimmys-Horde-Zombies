@@ -387,6 +387,7 @@ local function FillMesh(bucket, inset)
 end
 
 local function RebuildBucket(b, now)
+    local t0 = HZ.ProfOn and SysTime()
     local ok, quadCount = pcall(GatherBucket, b, now)
     if not ok then
         ErrorNoHalt("[hordez] impostor rebuild failed: " .. tostring(quadCount) .. "\n")
@@ -415,6 +416,8 @@ local function RebuildBucket(b, now)
             end
         end
     end
+
+    if t0 then HZ.ProfAdd("cl_imp_build", SysTime() - t0) end
 end
 
 local function Rebuild(now)
@@ -491,6 +494,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     Rebuild(now)
     if count == 0 then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     ShaderClock(now - epoch, now % 4096)
     render.OverrideDepthEnable(true, true)
     for _, layer in ipairs(LAYERS) do
@@ -502,6 +506,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     end
 
     render.OverrideDepthEnable(false, false)
+    if t0 then HZ.ProfAdd("cl_imp_draw", SysTime() - t0) end
 end)
 
 hook.Add("HUDPaint", "hordez_impostor_debug", function()

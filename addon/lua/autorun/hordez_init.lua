@@ -1,6 +1,7 @@
 HZ = HZ or {}
 
 AddCSLuaFile("hordez/sh_config.lua")
+AddCSLuaFile("hordez/sh_prof.lua")
 AddCSLuaFile("hordez/sh_precache.lua")
 AddCSLuaFile("hordez/cl_util.lua")
 AddCSLuaFile("hordez/cl_virtual.lua")
@@ -10,6 +11,7 @@ AddCSLuaFile("hordez/cl_menu.lua")
 AddCSLuaFile("hordez/cl_faces.lua")
 AddCSLuaFile("hordez/cl_steps.lua")
 include("hordez/sh_config.lua")
+include("hordez/sh_prof.lua")
 include("hordez/sh_precache.lua")
 
 if SERVER then

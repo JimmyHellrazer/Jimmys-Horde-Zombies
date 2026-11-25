@@ -9,7 +9,7 @@ for m in re.finditer(r'(?m)^\s*(?:\$model\s+"[^"]+"|studio)\s+"([^"]+\.smd)"', q
 parent = dict((m.group(1), m.group(2)) for m in re.finditer(r'(?m)^\$definebone\s+"([^"]+)"\s+"([^"]*)"', qc))
 helpers = [b for b in parent if re.search(r'_(Ulna|Wrist|Elbow|Bicep|Shoulder|Trapezius|Toe0)$', b)]
 hands = [b for b in parent if re.search(r'Bip01_[RL]_Hand$', b)]
-FACE = re.compile(r'(eyeball|pupil|glint|^mouth$)', re.I)
+FACE = re.compile(r'(eyeball|pupil|glint|^f?mouth$|^throte$)', re.I)
 folder = os.path.dirname(path)
 materials = []
 for smd in smds:

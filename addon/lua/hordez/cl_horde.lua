@@ -147,6 +147,7 @@ local function CopyFlex(from, to)
 end
 
 local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
+    local t0 = HZ.ProfOn and SysTime()
     local rag, pooled = AcquireRagdoll(mdl)
     if not IsValid(rag) then return end
 
@@ -192,6 +193,7 @@ local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
     rag:DrawShadow(true)
     rags[#rags + 1] = { ent = rag, mdl = mdl, die = CurTime() + ragTime:GetFloat() }
     PruneRagdolls()
+    if t0 then HZ.ProfAdd("cl_ragdoll", SysTime() - t0) end
 
     return rag
 end
@@ -418,6 +420,7 @@ local function StartDeath(ent, kind, dir, groups, vel)
     if not pick then return false end
 
     local mdl = ent:GetModel()
+    local t0 = HZ.ProfOn and SysTime()
     local deathModel = AcquireDeathModel(mdl)
     if not IsValid(deathModel) then return false end
 
@@ -472,6 +475,7 @@ local function StartDeath(ent, kind, dir, groups, vel)
     end
 
     deathModel:SetupBones()
+    if t0 then HZ.ProfAdd("cl_death_start", SysTime() - t0) end
 
     return true
 end
@@ -599,6 +603,7 @@ end
 hook.Add("Think", "hordez_dying", function()
     if #dying == 0 then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     local now = CurTime()
     for i = #dying, 1, -1 do
         local death = dying[i]
@@ -613,7 +618,13 @@ hook.Add("Think", "hordez_dying", function()
             end
         end
     end
+
+    if t0 then HZ.ProfAdd("cl_death_step", SysTime() - t0) end
 end)
+
+function HZ.ProfClientStats()
+    return { rags = #rags, ragPool = ragPoolCount, dying = #dying, csmPool = csmPoolCount }
+end
 
 net.Receive("hz_rag", function()
     local ent = net.ReadEntity()

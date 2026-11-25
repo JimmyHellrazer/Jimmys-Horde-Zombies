@@ -79,6 +79,7 @@ hook.Add("Think", "hordez_faces", function()
         return
     end
 
+    local t0 = HZ.ProfOn and SysTime()
     local now = CurTime()
     local dt = FrameTime()
 
@@ -128,4 +129,6 @@ hook.Add("Think", "hordez_faces", function()
             end
         end
     end
+
+    if t0 then HZ.ProfAdd("cl_faces", SysTime() - t0) end
 end)

@@ -56,6 +56,7 @@ HZ.CV = {
     voices      = MakeConVar("hz_voices", "6", "Zombie vocalisations allowed per second (all zombies)"),
     climb       = MakeConVar("hz_climb", "1", "Zombies climb ledges up to 168 units"),
     debug       = MakeConVar("hz_debug", "0", "Debug overlays/prints"),
+    profile     = CreateConVar("hz_profile", "0", FCVAR_REPLICATED, "Show live performance profiler overlay"),
     horde_count = MakeConVar("hz_horde_count", "12", "How many zombies the 'Infected Horde' spawnmenu entry drops"),
     horde_alert = MakeConVar("hz_horde_alerted", "0", "1 = 'Infected Horde' spawns already chasing, 0 = idle"),
     accessory   = MakeConVar("hz_accessory_chance", "0.2", "Chance of a beanie / gloves / glasses (each)"),

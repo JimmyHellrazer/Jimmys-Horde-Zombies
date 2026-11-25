@@ -196,6 +196,9 @@ local function ServerPanel(panel)
 
     Section(panel, "Developer", false, function(ui)
         ui.Check("Debug prints", "hz_debug")
+        ui.Check("Profiler (prints report on stop)", "hz_profile")
+        ui.Button("Print profiler report to console", "hz_profile_dump")
+        ui.Button("Reset profiler", "hz_profile_reset")
         ui.Note("Stress test: hz_stress <count> [chasing] [radius]")
     end)
 end

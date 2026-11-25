@@ -323,6 +323,7 @@ timer.Create("hordez_detail", 0.25, 0, function()
     local ply = LocalPlayer()
     if not IsValid(ply) then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     local eye = EyePos()
     local ex, ey, ez = eye.x, eye.y, eye.z
     local aim = EyeVector()
@@ -396,4 +397,6 @@ timer.Create("hordez_detail", 0.25, 0, function()
             end
         end
     end
+
+    if t0 then HZ.ProfAdd("cl_detail", SysTime() - t0) end
 end)

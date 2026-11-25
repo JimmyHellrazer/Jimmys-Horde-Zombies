@@ -35,7 +35,9 @@ if CLIENT then
             return
         end
 
+        local t0 = HZ.ProfOn and SysTime()
         self:DrawModel(flags)
+        if t0 then HZ.ProfAdd("cl_draw", SysTime() - t0) end
     end
 
     return
@@ -454,8 +456,10 @@ end
 function ENT:BodyUpdate()
     if self.hz_frozen then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     if not self.hz_dead and self:Health() <= 0 then
         self:OnKilled(DamageInfo())
+        if t0 then HZ.ProfAdd("sv_body", SysTime() - t0) end
         return
     end
 
@@ -480,6 +484,8 @@ function ENT:BodyUpdate()
     if self.hz_wrap and self.hz_wantLoop and self:GetCycle() >= 0.995 then
         self:SetCycle(0)
     end
+
+    if t0 then HZ.ProfAdd("sv_body", SysTime() - t0) end
 end
 
 function ENT:RunBehaviour()
@@ -1214,7 +1220,11 @@ function ENT:HZ_Clear(pos, target)
 end
 
 function ENT:HZ_Chase(now)
-    if now >= self.hz_nextBrain then self:HZ_Brain(now) end
+    if now >= self.hz_nextBrain then
+        local t0 = HZ.ProfOn and SysTime()
+        self:HZ_Brain(now)
+        if t0 then HZ.ProfAdd("sv_brain", SysTime() - t0) end
+    end
     if self.hz_dead or not self.hz_alerted then return end
 
     if self.hz_attacking then

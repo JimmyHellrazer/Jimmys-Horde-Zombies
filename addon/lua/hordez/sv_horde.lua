@@ -849,6 +849,7 @@ function HZ.SpawnZombie(pos, yaw, opts)
     opts = opts or {}
     if not opts.force and not HZ.CanSpawn() then return nil end
 
+    local t0 = HZ.ProfOn and SysTime()
     pos = HZ.FreeSpot(pos)
     local zombie = ents.Create("hz_zombie")
     if not IsValid(zombie) then return nil end
@@ -868,6 +869,7 @@ function HZ.SpawnZombie(pos, yaw, opts)
     zombie:SetAngles(Angle(0, yaw or math.Rand(0, 360), 0))
     zombie:Spawn()
     zombie:Activate()
+    if t0 then HZ.ProfAdd("sv_spawn", SysTime() - t0) end
 
     return zombie
 end

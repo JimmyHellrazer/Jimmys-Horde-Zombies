@@ -598,7 +598,9 @@ timer.Create("hordez_virtual_cover", 1, 0, function()
     if not HZ.VirtualOn() or HZ.AIDisabled() then return end
     if HZ.VCount == 0 and HZ.Count <= CV.real_max:GetInt() then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     CoverPass()
+    if t0 then HZ.ProfAdd("sv_vcover", SysTime() - t0) end
 end)
 
 local PROMOTE_PER_PASS = 2
@@ -656,6 +658,7 @@ timer.Create("hordez_virtual", 0.25, 0, function()
 
     if HZ.AIDisabled() then return end
 
+    local t0 = HZ.ProfOn and SysTime()
     local now = CurTime()
     local targets, targetCount = ViewerList()
     local near = CV.virt_near:GetFloat()
@@ -744,6 +747,7 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     end
 
     FlushNet()
+    if t0 then HZ.ProfAdd("sv_virtual", SysTime() - t0) end
 end)
 
 local DEMOTE_PER_PASS = 30

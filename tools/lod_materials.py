@@ -13,7 +13,7 @@ for folder, _, files in os.walk(root):
             continue
         text = open(os.path.join(folder, name), encoding="latin1").read()
         text = re.sub(r"[ \t]*//[^\n]*", "", text)
-        if not re.match(r'\s*"?vertexlitgeneric"?', text, re.I):
+        if not re.match(r'\s*"?(vertexlitgeneric|unlitgeneric)"?', text, re.I):
             continue
         base = name[:-4]
         light = NOCULL.sub("", text)

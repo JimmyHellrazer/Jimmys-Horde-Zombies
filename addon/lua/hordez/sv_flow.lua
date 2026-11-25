@@ -529,7 +529,9 @@ hook.Add("Think", "hordez_flow", function()
     if not needed then return end
 
     if co_solve then
+        local t0 = HZ.ProfOn and SysTime()
         local ok, err = Resume(co_solve)
+        if t0 then HZ.ProfAdd("sv_flow", SysTime() - t0) end
         if not ok then
             ErrorNoHalt("[hordez] flow solve failed: " .. tostring(err) .. "\n")
             co_solve = nil

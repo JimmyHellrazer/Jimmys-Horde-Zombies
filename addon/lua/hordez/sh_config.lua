@@ -1,5 +1,5 @@
 HZ = HZ or {}
-HZ.Version = "0.20.1"
+HZ.Version = "0.20.2"
 
 local FLAGS = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
 
@@ -66,6 +66,8 @@ HZ.CV = {
         "Damage of one runner blow on a door, ~1 per second each (shamblers 60%, slower)"),
     ahead       = MakeConVar("hz_director_ahead", "0.8",
         "How often the director spawns ahead of where players are heading (0-1)"),
+    straggle    = MakeConVar("hz_straggler_time", "20",
+        "Horde zombies that get no closer to a player for this many seconds while out of sight respawn somewhere better (0 = off)"),
     sh_chance   = MakeConVar("hz_shambler_chance", "0",
         "Chance a zombie spawned without a set variant is a Romero shambler"),
     sh_mix      = MakeConVar("hz_shambler_mix", "0.5", "Shambler share when a director / spawner is set to Mix"),

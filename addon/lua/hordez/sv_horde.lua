@@ -814,6 +814,16 @@ function HZ.SpawnZombie(pos, yaw, opts)
     return zombie
 end
 
+function HZ.IsStraggler(zombie, now)
+    local wait = HZ.CV.straggle:GetFloat()
+    if wait <= 0 or not IsValid(zombie) or not zombie.hz_alerted or zombie.hz_dead or zombie.hz_climbing
+        or zombie.hz_inOnce or not zombie.hz_progressAt or now - zombie.hz_progressAt < wait then
+        return false
+    end
+
+    return not HZ.SeenByPlayers(zombie:GetPos(), 1000)
+end
+
 function HZ.SeenByPlayers(pos, near)
     near = near or 600
     local head = pos + Vector(0, 0, 56)

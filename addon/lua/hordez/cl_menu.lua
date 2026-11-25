@@ -99,6 +99,8 @@ local function ServerPanel(pos)
     AddHeader(pos, "Director")
     pos:NumSlider("Spawn ahead of players", "hz_director_ahead", 0, 1, 2)
     pos:ControlHelp("How often calm zombies are placed where players are heading (hordes use half of this).")
+    pos:NumSlider("Respawn stragglers after (s)", "hz_straggler_time", 0, 120, 0)
+    pos:ControlHelp("Horde and survival zombies that get no closer to anyone for this long, out of sight, are respawned at a fresh hidden spot. 0 = off.")
 
     AddHeader(pos, "Senses")
     pos:NumSlider("Sight range", "hz_sight", 100, 5000, 0)

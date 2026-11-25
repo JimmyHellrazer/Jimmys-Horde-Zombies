@@ -214,6 +214,29 @@ function ENT:SpawnHordeBatch()
     end
 end
 
+function ENT:RespawnStragglers()
+    local queue = self.respawnQueue
+    if not queue or #queue == 0 then return end
+
+    for _ = 1, 2 do
+        if #queue == 0 or not self:CanOwnMore() then return end
+
+        local _, pos = HZ.FindSpawnArea(self:GetSpawnMin(), self:GetSpawnMax(), 12, HZ.CV.ahead:GetFloat() * 0.5)
+        if not pos then return end
+
+        local zombie, row = HZ.SpawnChaser(pos + Vector(0, 0, 4), { owner = self, horde = true,
+            shambler = queue[#queue] })
+
+        if not zombie and not row then return end
+
+        queue[#queue] = nil
+        if zombie then
+            self:Own(zombie, true)
+            if self.hordeSpawned then self.hordeSpawned[zombie] = true end
+        end
+    end
+end
+
 function ENT:Despawn(now)
     if now < self.nextDespawn then return end
 
@@ -231,6 +254,11 @@ function ENT:Despawn(now)
             local limit = zombie.hz_alerted and far * 1.3 or far
             if dist > limit and not HZ.SeenByPlayers(pos, 800) then
                 self.owned[zombie] = nil
+                zombie:Remove()
+            elseif zombie.hz_horde and HZ.IsStraggler(zombie, now) then
+                self.owned[zombie] = nil
+                self.respawnQueue = self.respawnQueue or {}
+                self.respawnQueue[#self.respawnQueue + 1] = zombie.hz_shambler and true or false
                 zombie:Remove()
             end
         end
@@ -296,6 +324,7 @@ function ENT:Think()
         end
     end
 
+    self:RespawnStragglers()
     self:Despawn(now)
     self:SetPhase(self.phase)
 

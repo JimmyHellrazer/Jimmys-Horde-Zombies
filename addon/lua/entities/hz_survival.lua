@@ -306,7 +306,7 @@ function ENT:Recycle(now)
             local pos = zombie:GetPos()
             local area = HZ.Flow.AreaOf(zombie)
             local dist = area and HZ.Flow.dist[area:GetID()] or HZ.NearestPlayerDist(pos)
-            if dist > far and not HZ.SeenByPlayers(pos, 800) then
+            if (dist > far and not HZ.SeenByPlayers(pos, 800)) or HZ.IsStraggler(zombie, now) then
                 self.owned[zombie] = nil
                 zombie:Remove()
                 if not self.hellMode then self.waveLeft = self.waveLeft + 1 end

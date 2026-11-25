@@ -60,6 +60,8 @@ local function FilterPair(a, b)
 end
 
 local CLEAR_MINS, CLEAR_MAXS = Vector(-8, -8, 0), Vector(8, 8, 24)
+local FEEL_UP, FEEL_REACH, FEEL_STEER = Vector(0, 0, 24), 50, 80
+local FEEL_COS, FEEL_SIN = math.cos(math.rad(35)), math.sin(math.rad(35))
 local FLANK_MINS, FLANK_MAXS = Vector(-10, -10, 0), Vector(10, 10, 40)
 local AHEAD_MINS, AHEAD_MAXS = Vector(-10, -10, 0), Vector(10, 10, 8)
 
@@ -1248,13 +1250,20 @@ function ENT:HZ_Brain(now)
     end
 
     self.hz_nextBrain = now + think
-    if self.hz_attacking then return end
-    if self:HZ_LureStep(now, pos) then return end
+    if self.hz_attacking or self:HZ_LureStep(now, pos) then
+        self.hz_progressAt = now
+        return
+    end
 
     local area = HZ.Flow.AreaOf(self)
     local nextId, flowDist, flowTarget
     if area then nextId, flowDist, flowTarget = HZ.Flow.Step(area:GetID()) end
     self.hz_flowDist = flowDist
+    local best = self.hz_bestFlow
+    if not self.hz_progressAt or (flowDist and (flowDist < 300 or not best or flowDist < best - 48
+        or flowDist > best + 600)) then
+        self.hz_bestFlow, self.hz_progressAt = flowDist, now
+    end
     local target = (flowTarget and HZ.IsHostile(flowTarget)) and flowTarget or nil
     local near, nearDist = self:HZ_NearestTarget(pos)
     if near and (not target or nearDist < 300) then target = near end
@@ -1387,17 +1396,23 @@ function ENT:HZ_Brain(now)
         end
     end
 
+    if not link and targetDist > 90 and playerDist < CV.hot_dist:GetFloat() then goal = self:HZ_Feel(pos, goal) end
+
     local separation = not self.hz_atWall and HZ.Separation(self, pos)
     if separation then goal = goal + separation end
     if self.hz_sideUntil and now < self.hz_sideUntil then goal = goal + self.hz_sideOff end
     self.hz_goal = goal
     if not self.hz_falling then self:HZ_SetMove("run") end
-    if targetDist > 70 and CV.climb:GetBool() and self.loco:GetVelocity():Length2DSqr() > 60 * 60 then
+    if targetDist > 70 and CV.climb:GetBool() and now >= (self.hz_nextVaultTry or 0) then
         local from = pos + UP20
         local aheadTr = HullTrace(from, from + self:GetForward() * 30, AHEAD_MINS, AHEAD_MAXS, MASK_NPCSOLID,
             NO_ZOMBIES)
 
-        if aheadTr.Hit and not aheadTr.StartSolid and self:HZ_TryVault(goal) then return end
+        if aheadTr.Hit and not aheadTr.StartSolid then
+            if self:HZ_TryVault(goal) then return end
+
+            self.hz_nextVaultTry = now + 0.6
+        end
     end
 
     if targetDist < 120 and now > (self.hz_nextSwing or 0) then
@@ -1668,6 +1683,32 @@ function ENT:HZ_TryHit(target, reach)
     if target:IsPlayer() then target:ViewPunch(Angle(math.Rand(-3, 3), math.Rand(-4, 4), math.Rand(-2, 2))) end
 end
 
+function ENT:HZ_Feel(pos, goal)
+    local dx, dy = goal.x - pos.x, goal.y - pos.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 24 then return goal end
+
+    dx, dy = dx / len, dy / len
+    local from = pos + FEEL_UP
+    local reach = math.min(FEEL_REACH, len)
+    local ahead = LineTrace(from, from + Vector(dx * reach, dy * reach, 0), MASK_NPCSOLID, NO_ZOMBIES)
+    if not ahead.Hit or ahead.StartSolid then return goal end
+
+    local normal = ahead.HitNormal
+    local cross = dx * normal.y - dy * normal.x
+    local first = cross > 0.05 and 1 or (cross < -0.05 and -1 or (self.hz_flankSlot >= 0 and 1 or -1))
+    for pass = 1, 2 do
+        local side = pass == 1 and first or -first
+        local sx = dx * FEEL_COS - dy * FEEL_SIN * side
+        local sy = dy * FEEL_COS + dx * FEEL_SIN * side
+        if not LineTrace(from, from + Vector(sx * FEEL_REACH, sy * FEEL_REACH, 0), MASK_NPCSOLID, NO_ZOMBIES).Hit then
+            return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z)
+        end
+    end
+
+    return goal
+end
+
 function ENT:HZ_StuckCheck(now)
     if now < (self.hz_nextStuck or 0) then return end
 
@@ -1681,8 +1722,8 @@ function ENT:HZ_StuckCheck(now)
         return
     end
 
-    local dx, dy = pos.x - last.x, pos.y - last.y
-    if dx * dx + dy * dy > 64 or pos:DistToSqr(goal) < 1600 then
+    local need = math.max(self.loco:GetDesiredSpeed() * 0.16, 3)
+    if last:Distance(goal) - pos:Distance(goal) > need or pos:DistToSqr(goal) < 1600 then
         self.hz_stuckSince = nil
         return
     end

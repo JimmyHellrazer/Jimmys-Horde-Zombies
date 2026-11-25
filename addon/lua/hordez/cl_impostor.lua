@@ -313,12 +313,12 @@ local function GatherQuads(now)
         for id, row in pairs(HZ.VirtualCl) do
             if count >= MAX_QUADS then break end
 
+            local group = row.group
             local x, y, z = posAt(row, now)
-            local moving = now < row.t1
+            local moving = now < group.t1
             local dx, dy, dz = x - ex, y - ey, z - ez
-            EmitQuad(row, now, x, y, z, moving and row.vx or 0, moving and row.vy
-                or 0, moving, row.yaw, id, row.female, row.shambler,
-                (dx * dx + dy * dy + dz * dz) ^ 0.5)
+            EmitQuad(row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving, group.yaw, id,
+                row.female, row.shambler, (dx * dx + dy * dy + dz * dz) ^ 0.5)
 
             count = count + 1
         end

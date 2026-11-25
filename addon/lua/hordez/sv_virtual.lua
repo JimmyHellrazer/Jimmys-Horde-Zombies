@@ -13,23 +13,59 @@ function HZ.VirtualOn()
     return CV.virt:GetBool()
 end
 
-local nextId, freeIds, cooling = 1, {}, {}
-local pendAdd, pendMove, pendDel = {}, {}, {}
+local GROUP_MAX, GROUP_RADIUS = 24, 90
+local groups = {}
+local ownedCount, ownedHorde = {}, {}
 
-local function NewId()
-    local count = #freeIds
-    if count > 0 then
-        local id = freeIds[count]
-        freeIds[count] = nil
-        return id
+function HZ.VirtualOwned(owner)
+    return ownedCount[owner] or 0
+end
+
+function HZ.VirtualOwnedHorde(owner)
+    return ownedHorde[owner] or 0
+end
+
+local function CountOwned(row, delta)
+    local owner = row.owner
+    if not owner then return end
+
+    ownedCount[owner] = (ownedCount[owner] or 0) + delta
+    if row.horde then ownedHorde[owner] = (ownedHorde[owner] or 0) + delta end
+    if ownedCount[owner] <= 0 then ownedCount[owner], ownedHorde[owner] = nil, nil end
+end
+
+local function IdPool()
+    local pool = { nextId = 1, free = {}, cooling = {} }
+
+    function pool:Take()
+        local count = #self.free
+        if count > 0 then
+            local id = self.free[count]
+            self.free[count] = nil
+            return id
+        end
+
+        if self.nextId > 65000 then return nil end
+
+        self.nextId = self.nextId + 1
+
+        return self.nextId - 1
     end
 
-    if nextId > 65000 then return nil end
+    function pool:Release(id)
+        self.cooling[#self.cooling + 1] = id
+    end
 
-    nextId = nextId + 1
+    function pool:Settle()
+        for i = 1, #self.cooling do self.free[#self.free + 1] = self.cooling[i] end
+        self.cooling = {}
+    end
 
-    return nextId - 1
+    return pool
 end
+
+local rowIds, groupIds = IdPool(), IdPool()
+local pendDel, pendGroupDel, pendGroupAdd, pendAdd, pendMove = {}, {}, {}, {}, {}
 
 local function Slice(list, from)
     local out = {}
@@ -42,69 +78,125 @@ local function ClampCoord(value)
     return max(-32767, min(32767, floor(value + 0.5)))
 end
 
-local function WriteAdd(row, x, y, z)
-    net.WriteUInt(row.id, 16)
+local function WritePos(x, y, z)
     net.WriteInt(ClampCoord(x), 16)
     net.WriteInt(ClampCoord(y), 16)
     net.WriteInt(ClampCoord(z), 16)
-    net.WriteUInt(min(floor(row.speed), 1023), 10)
+end
+
+local function WriteRowDel(entry)
+    net.WriteUInt(entry[1], 16)
+    net.WriteBool(entry[2])
+end
+
+local function WriteGroupDel(id)
+    net.WriteUInt(id, 16)
+end
+
+local function WriteGroupAdd(group)
+    net.WriteUInt(group.id, 16)
+    WritePos(group.x, group.y, group.z)
+    net.WriteUInt(min(floor(group.speed), 1023), 10)
+end
+
+local function WriteRowAdd(row)
+    net.WriteUInt(row.id, 16)
+    net.WriteUInt(row.group.id, 16)
+    net.WriteInt(max(-255, min(255, floor(row.ox + 0.5))), 9)
+    net.WriteInt(max(-255, min(255, floor(row.oy + 0.5))), 9)
     net.WriteBool(row.female)
     net.WriteBool(row.shambler)
 end
 
+local function WriteGroupMove(group)
+    net.WriteUInt(group.id, 16)
+    WritePos(group.wx, group.wy, group.wz)
+end
+
 local CHUNK = 2000
 
+local function WriteList(list, write, blocked)
+    local count = blocked and 0 or min(#list, CHUNK)
+    net.WriteUInt(count, 16)
+    for i = 1, count do write(list[i]) end
+
+    return Slice(list, count + 1)
+end
+
 local function FlushNet()
-    while #pendDel > 0 or #pendAdd > 0 or #pendMove > 0 do
+    while #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0 or #pendMove > 0 do
         net.Start("hz_virt")
-        local count = min(#pendDel, CHUNK)
-        net.WriteUInt(count, 16)
-        for i = 1, count do
-            local entry = pendDel[i]
-            net.WriteUInt(entry[1], 16)
-            net.WriteBool(entry[2])
-        end
+        pendDel = WriteList(pendDel, WriteRowDel, false)
+        pendGroupDel = WriteList(pendGroupDel, WriteGroupDel, #pendDel > 0)
+        pendGroupAdd = WriteList(pendGroupAdd, WriteGroupAdd, #pendDel > 0 or #pendGroupDel > 0)
+        pendAdd = WriteList(pendAdd, WriteRowAdd, #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0)
+        pendMove = WriteList(pendMove, WriteGroupMove,
+            #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0)
 
-        pendDel = Slice(pendDel, count + 1)
-        local delsLeft = #pendDel > 0
-        count = delsLeft and 0 or min(#pendAdd, CHUNK)
-        net.WriteUInt(count, 16)
-        for i = 1, count do
-            local row = pendAdd[i]
-            WriteAdd(row, row.x, row.y, row.z)
-        end
-
-        pendAdd = Slice(pendAdd, count + 1)
-        local addsLeft = delsLeft or #pendAdd > 0
-        count = addsLeft and 0 or min(#pendMove, CHUNK)
-        net.WriteUInt(count, 16)
-        for i = 1, count do
-            local row = pendMove[i]
-            net.WriteUInt(row.id, 16)
-            net.WriteInt(ClampCoord(row.wx), 16)
-            net.WriteInt(ClampCoord(row.wy), 16)
-            net.WriteInt(ClampCoord(row.wz), 16)
-        end
-
-        pendMove = Slice(pendMove, count + 1)
         net.Broadcast()
     end
 
-    for i = 1, #cooling do freeIds[#freeIds + 1] = cooling[i] end
-    cooling = {}
+    rowIds:Settle()
+    groupIds:Settle()
 end
 
-local function PosAt(row, now)
-    local t0, t1 = row.t0, row.t1
-    if now >= t1 or t1 <= t0 then return row.wx, row.wy, row.wz end
+local function PosAt(group, now)
+    local t0, t1 = group.t0, group.t1
+    if now >= t1 or t1 <= t0 then return group.wx, group.wy, group.wz end
 
     local frac = (now - t0) / (t1 - t0)
 
-    return row.x + (row.wx - row.x) * frac, row.y + (row.wy - row.y) * frac, row.z + (row.wz - row.z) * frac
+    return group.x + (group.wx - group.x) * frac, group.y + (group.wy - group.y) * frac,
+        group.z + (group.wz - group.z) * frac
+end
+
+local function RowPos(row, now)
+    local x, y, z = PosAt(row.group, now)
+
+    return x + row.ox, y + row.oy, z
+end
+
+local function NewGroup(pos, speed, shambler, area)
+    local id = groupIds:Take()
+    if not id then return nil end
+
+    local now = CurTime()
+    local group = { id = id, x = pos.x, y = pos.y, z = pos.z, wx = pos.x, wy = pos.y, wz = pos.z, t0 = now, t1 = now,
+        speed = max(speed, 5), shambler = shambler, area = area, count = 0 }
+
+    groups[id] = group
+    pendGroupAdd[#pendGroupAdd + 1] = group
+
+    return group
+end
+
+local function JoinGroup(row, pos, speed, area)
+    local now = CurTime()
+    local best, bestDist
+    for _, group in pairs(groups) do
+        if group.shambler == row.shambler and group.count < GROUP_MAX then
+            local x, y, z = PosAt(group, now)
+            local dx, dy = pos.x - x, pos.y - y
+            local distSqr = dx * dx + dy * dy
+            if distSqr < GROUP_RADIUS * GROUP_RADIUS and math.abs(pos.z - z) < 60
+                and (not bestDist or distSqr < bestDist) then
+                best, bestDist = group, distSqr
+            end
+        end
+    end
+
+    best = best or NewGroup(pos, speed, row.shambler, area)
+    if not best then return false end
+
+    local x, y = PosAt(best, now)
+    row.group, row.ox, row.oy = best, pos.x - x, pos.y - y
+    best.count = best.count + 1
+
+    return true
 end
 
 function HZ.AddVirtual(pos, opts)
-    local id = NewId()
+    local id = rowIds:Take()
     if not id then return nil end
 
     opts = opts or {}
@@ -121,17 +213,42 @@ function HZ.AddVirtual(pos, opts)
         end
     end
 
-    local now = CurTime()
-    local row = { id = id, x = pos.x, y = pos.y, z = pos.z, wx = pos.x, wy = pos.y, wz = pos.z, t0 = now, t1 = now,
-        speed = max(speed, 5), shambler = shambler and true or false, model = model,
-        female = model:find("female", 1, true) ~= nil, hp = opts.hp or 1, area = opts.area, born = now,
-        hz_cover = opts.cover }
+    local row = { id = id, shambler = shambler and true or false, model = model, speed = speed,
+        female = model:find("female", 1, true) ~= nil, hp = opts.hp or 1, born = CurTime(), hz_cover = opts.cover,
+        owner = IsValid(opts.owner) and opts.owner or nil, horde = opts.horde and true or nil, omni = opts.omni,
+        maxHp = opts.maxHp }
+
+    if not JoinGroup(row, pos, speed, opts.area) then
+        rowIds:Release(id)
+        return nil
+    end
 
     rows[id] = row
     HZ.VCount = HZ.VCount + 1
+    CountOwned(row, 1)
     pendAdd[#pendAdd + 1] = row
 
     return row
+end
+
+local function Forget(list, item)
+    for i = #list, 1, -1 do
+        if list[i] == item then
+            table.remove(list, i)
+            return true
+        end
+    end
+
+    return false
+end
+
+local function DropGroup(group)
+    if groups[group.id] ~= group then return end
+
+    groups[group.id] = nil
+    groupIds:Release(group.id)
+    Forget(pendMove, group)
+    if not Forget(pendGroupAdd, group) then pendGroupDel[#pendGroupDel + 1] = group.id end
 end
 
 local function DropRow(row, killed)
@@ -139,132 +256,148 @@ local function DropRow(row, killed)
 
     rows[row.id] = nil
     HZ.VCount = HZ.VCount - 1
-    pendDel[#pendDel + 1] = { row.id, killed and true or false }
-    cooling[#cooling + 1] = row.id
-    for i = #pendAdd, 1, -1 do
-        if pendAdd[i] == row then
-            table.remove(pendAdd, i)
-            pendDel[#pendDel] = nil
-            break
-        end
+    CountOwned(row, -1)
+    rowIds:Release(row.id)
+    if not Forget(pendAdd, row) then pendDel[#pendDel + 1] = { row.id, killed and true or false } end
+
+    local group = row.group
+    group.count = group.count - 1
+    if group.count <= 0 then DropGroup(group) end
+end
+
+function HZ.DropVirtualOwned(owner)
+    if not ownedCount[owner] then return end
+
+    for _, row in pairs(rows) do
+        if row.owner == owner then DropRow(row, false) end
     end
 
-    for i = #pendMove, 1, -1 do
-        if pendMove[i] == row then table.remove(pendMove, i) end
-    end
+    FlushNet()
 end
 
 function HZ.ClearVirtual()
     for _, row in pairs(rows) do DropRow(row, false) end
+    for _, group in pairs(groups) do DropGroup(group) end
     FlushNet()
 end
 
 local STEP, LEG_TIME = 260, 1.2
 local probe = Vector()
 
-local function NextLeg(row, now, x, y, z)
+local function NextLeg(group, now, x, y, z)
     local graph = Flow.graph
     if not graph or not Flow.ready then
-        row.t1 = now + 1
+        group.t1 = now + 1
         return
     end
 
-    local area = row.area
+    local area = group.area
     if not area or not graph.area[area] then
         local navArea = navmesh.GetNearestNavArea(Vector(x, y, z), false, 400, false, true)
         area = navArea and navArea:GetID()
         if not area or not graph.area[area] then
-            row.t1 = now + 2
+            group.t1 = now + 2
             return
         end
 
-        row.area = area
+        group.area = area
     end
 
-    if not row.gx then
+    if not group.gx then
         local nextId = Flow.nxt[area]
         if nextId == false then
             local target = Flow.tgt[area]
             if not IsValid(target) then
-                row.t1 = now + 0.5
+                group.t1 = now + 0.5
                 return
             end
 
             local pos = target:GetPos()
-            row.gx, row.gy, row.gz, row.garea, row.gextra = pos.x, pos.y, pos.z, nil, 0
+            group.gx, group.gy, group.gz, group.garea, group.gextra = pos.x, pos.y, pos.z, nil, 0
         elseif nextId then
             local nextArea = graph.area[nextId]
             if not IsValid(nextArea) then
-                row.t1 = now + 1
+                group.t1 = now + 1
                 return
             end
 
             local pos = nextArea:GetClosestPointOnArea(Vector(x, y, z))
             local center = graph.center[nextId]
             local frac = 0.2 + random() * 0.7
-            row.gx, row.gy, row.gz = pos.x + (center.x - pos.x) * frac, pos.y + (center.y - pos.y) * frac,
+            group.gx, group.gy, group.gz = pos.x + (center.x - pos.x) * frac, pos.y + (center.y - pos.y) * frac,
                 pos.z + (center.z - pos.z) * frac
 
-            row.garea = nextId
-            row.fv = Flow.version
-            row.gextra = Flow.ClimbLink(area, nextId) and (0.6 + math.abs(pos.z - z) / 80) or 0
+            group.garea = nextId
+            group.fv = Flow.version
+            group.gextra = Flow.ClimbLink(area, nextId) and (0.6 + math.abs(pos.z - z) / 80) or 0
         else
-            row.t1 = now + 1
+            group.t1 = now + 1
             return
         end
     end
 
-    local dx, dy = row.gx - x, row.gy - y
+    local dx, dy = group.gx - x, group.gy - y
     local dist = sqrt(dx * dx + dy * dy)
     local tx, ty, tz, extra = nil, nil, nil, 0
-    local STEP = max(40, min(STEP, row.speed * LEG_TIME))
+    local STEP = max(40, min(STEP, group.speed * LEG_TIME))
     if dist <= STEP then
-        tx, ty, tz, extra = row.gx, row.gy, row.gz, row.gextra or 0
-        if row.garea then row.area = row.garea end
-        row.gx = nil
+        tx, ty, tz, extra = group.gx, group.gy, group.gz, group.gextra or 0
+        if group.garea then group.area = group.garea end
+        group.gx = nil
     else
         tx, ty = x + dx / dist * STEP, y + dy / dist * STEP
         probe:SetUnpacked(tx, ty, z)
-        local nextArea, cur = row.garea and graph.area[row.garea], graph.area[area]
+        local nextArea, cur = group.garea and graph.area[group.garea], graph.area[area]
         if nextArea and IsValid(nextArea) and nextArea:IsOverlapping(probe, 2) then
             tz = nextArea:GetZ(probe)
         elseif IsValid(cur) and cur:IsOverlapping(probe, 2) then
             tz = cur:GetZ(probe)
         else
-            tz = z + (row.gz - z) * (STEP / dist)
+            tz = z + (group.gz - z) * (STEP / dist)
         end
 
-        if not row.garea then row.gx = nil end
+        if not group.garea then group.gx = nil end
     end
 
     local ex, ey, ez = tx - x, ty - y, tz - z
     local len = sqrt(ex * ex + ey * ey + ez * ez)
-    row.x, row.y, row.z, row.t0 = x, y, z, now
-    row.wx, row.wy, row.wz = tx, ty, tz
-    row.t1 = now + max(len / row.speed, 0.05) + extra
-    pendMove[#pendMove + 1] = row
+    group.x, group.y, group.z, group.t0 = x, y, z, now
+    group.wx, group.wy, group.wz = tx, ty, tz
+    group.t1 = now + max(len / group.speed, 0.05) + extra
+    pendMove[#pendMove + 1] = group
 end
 
-local function HaltRow(row, now, x, y, z)
-    row.hold = true
-    row.x, row.y, row.z, row.wx, row.wy, row.wz, row.t0, row.t1 = x, y, z, x, y, z, now, now
-    pendMove[#pendMove + 1] = row
+local function HaltGroup(group, now, x, y, z)
+    group.hold = true
+    group.x, group.y, group.z, group.wx, group.wy, group.wz, group.t0, group.t1 = x, y, z, x, y, z, now, now
+    pendMove[#pendMove + 1] = group
 end
 
 local function PromoteRow(row, x, y, z)
-    local yaw = math.deg(math.atan2(row.wy - row.y, row.wx - row.x))
+    local group = row.group
+    local yaw = math.deg(math.atan2(group.wy - group.y, group.wx - group.x))
+    local owner = IsValid(row.owner) and row.owner or nil
     local ent = HZ.SpawnZombie(Vector(x, y, z + 4), yaw,
-        { alerted = true, shambler = row.shambler, model = row.model, force = true })
+        { alerted = true, shambler = row.shambler, model = row.model, force = true, owner = owner })
 
-    if not IsValid(ent) then return false end
+    if not IsValid(ent) then return nil end
 
-    if row.hp < 1 then ent:SetHealth(max(1, floor(ent:GetMaxHealth() * row.hp))) end
+    if row.maxHp then ent:SetMaxHealth(row.maxHp) end
+    if row.maxHp or row.hp < 1 then ent:SetHealth(max(1, floor(ent:GetMaxHealth() * row.hp))) end
+    if row.shambler then
+        ent.hz_shamSpeed = row.speed
+    else
+        ent.hz_speedMul = row.speed / max(CV.runspeed:GetFloat(), 1)
+    end
+
+    ent.hz_omni = row.omni
+    if owner and owner.HZ_OnZombieReal then owner:HZ_OnZombieReal(ent, row) end
     ent.hz_wasVirtual = true
     ent.hz_promotedAt = CurTime()
     ent.hz_cover = row.hz_cover
     DropRow(row, false)
 
-    return true
+    return ent
 end
 
 local function Demotable(zombie)
@@ -273,7 +406,8 @@ local function Demotable(zombie)
         or (zombie.hz_wasVirtual and not zombie.hz_wakeAt
         and (zombie.hz_pose == "wander" or zombie.hz_pose == "stand")))
         and CurTime() - (zombie.hz_promotedAt or 0) > 4
-        and not zombie.hz_dead and not IsValid(zombie.hz_owner) and not zombie.hz_inOnce and not zombie.hz_climbing
+        and not zombie.hz_dead and (not IsValid(zombie.hz_owner) or zombie.hz_owner.HZ_VirtualOK)
+        and not zombie.hz_inOnce and not zombie.hz_climbing
         and not zombie.hz_attacking and not zombie.hz_burnDie and not zombie.hz_shove and not zombie:IsOnFire()
         and zombie.loco:IsOnGround()
 end
@@ -286,7 +420,8 @@ local function DemoteZombie(zombie, pos)
     local row = HZ.AddVirtual(pos, { area = id, model = zombie:GetModel(), shambler = zombie.hz_shambler and true
         or false,
         speed = zombie.hz_shambler and zombie.hz_shamSpeed or CV.runspeed:GetFloat() * (zombie.hz_speedMul or 1),
-        hp = math.Clamp(zombie:Health() / max(zombie:GetMaxHealth(), 1), 0.05, 1), cover = zombie.hz_cover })
+        hp = math.Clamp(zombie:Health() / max(zombie:GetMaxHealth(), 1), 0.05, 1), cover = zombie.hz_cover,
+        owner = zombie.hz_owner, horde = zombie.hz_horde, omni = zombie.hz_omni, maxHp = zombie:GetMaxHealth() })
 
     if not row then return false end
 
@@ -357,7 +492,7 @@ local function CoverFor(eye, now)
     end
 
     for _, row in pairs(rows) do
-        Add(row, PosAt(row, now))
+        Add(row, RowPos(row, now))
     end
 
     for i = #coverOrder, count + 1, -1 do coverOrder[i] = nil end
@@ -468,7 +603,7 @@ end
 
 timer.Create("hordez_virtual", 0.25, 0, function()
     if HZ.VCount == 0 then
-        if #pendDel > 0 then FlushNet() end
+        if #pendDel > 0 or #pendGroupDel > 0 then FlushNet() end
         return
     end
 
@@ -481,8 +616,12 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     local cap = CV.real_max:GetInt()
     local real, promoted = HZ.Count, 0
     local waitCount = 0
+    for _, group in pairs(groups) do
+        group.nearest, group.cover = huge, huge
+    end
+
     for _, row in pairs(rows) do
-        local x, y, z = PosAt(row, now)
+        local x, y, z = RowPos(row, now)
         local best = huge
         for i = 1, targetCount do
             local viewer = targets[i]
@@ -491,12 +630,13 @@ timer.Create("hordez_virtual", 0.25, 0, function()
             if distSqr < best then best = distSqr end
         end
 
-        local walks = true
-        if best < nearSqr then
-            if real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
-                real, promoted = real + 1, promoted + 1
-                walks = false
-            else
+        local group = row.group
+        if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
+            real, promoted = real + 1, promoted + 1
+        else
+            if best < group.nearest then group.nearest = best end
+            if (row.hz_cover or 0) < group.cover then group.cover = row.hz_cover or 0 end
+            if best < nearSqr then
                 waitCount = waitCount + 1
                 local wait = waiting[waitCount]
                 if not wait then
@@ -505,31 +645,35 @@ timer.Create("hordez_virtual", 0.25, 0, function()
                 end
 
                 wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(row), x, y, z
-                local stop = max((300 + (row.id % 16) * 25) / (1 + (row.hz_cover or 0)), 90)
-                if best < stop * stop then
-                    if not row.hold then HaltRow(row, now, x, y, z) end
-                    walks = false
-                end
-            end
-        end
-
-        if walks then
-            if now >= row.t1 then
-                row.hold = nil
-                NextLeg(row, now, x, y, z)
-            elseif row.gx and row.garea and row.fv ~= Flow.version then
-                if Flow.nxt[row.area] ~= row.garea then
-                    row.gx = nil
-                    NextLeg(row, now, x, y, z)
-                else
-                    row.fv = Flow.version
-                end
             end
         end
     end
 
     for i = #waiting, waitCount + 1, -1 do waiting[i] = nil end
     if waitCount > 0 and targetCount > 0 then TradePlaces(waitCount, targets, targetCount, cap) end
+
+    for _, group in pairs(groups) do
+        if group.count > 0 then
+            local x, y, z = PosAt(group, now)
+            local cover, nearest = group.cover, group.nearest or huge
+            if not cover or cover == huge then cover = 0 end
+            local stop = max((300 + (group.id % 16) * 25) / (1 + cover), 90)
+            if nearest < nearSqr and nearest < stop * stop then
+                if not group.hold then HaltGroup(group, now, x, y, z) end
+            elseif now >= group.t1 then
+                group.hold = nil
+                NextLeg(group, now, x, y, z)
+            elseif group.gx and group.garea and group.fv ~= Flow.version then
+                if Flow.nxt[group.area] ~= group.garea then
+                    group.gx = nil
+                    NextLeg(group, now, x, y, z)
+                else
+                    group.fv = Flow.version
+                end
+            end
+        end
+    end
+
     FlushNet()
 end)
 
@@ -563,6 +707,67 @@ end)
 
 local shotTr = {}
 local shotIn = { mask = MASK_SHOT, output = shotTr }
+
+function HZ.SpawnChaser(pos, opts)
+    opts = opts or {}
+    local shambler = opts.shambler
+    if shambler == nil then shambler = random() < CV.sh_chance:GetFloat() end
+    local speedScale, healthScale = opts.speedScale or 1, opts.healthScale or 1
+    if not HZ.VirtualOn() or HZ.Count < CV.real_max:GetInt() then
+        local zombie = HZ.SpawnZombie(pos, nil, { alerted = true, owner = opts.owner, shambler = shambler })
+        if not IsValid(zombie) then return nil end
+
+        zombie.hz_omni = opts.omni
+        zombie.hz_speedMul = (zombie.hz_speedMul or 1) * speedScale
+        if zombie.hz_shamSpeed then zombie.hz_shamSpeed = zombie.hz_shamSpeed * speedScale end
+        if healthScale > 1 then
+            local health = math.Round(zombie:GetMaxHealth() * healthScale)
+            zombie:SetMaxHealth(health)
+            zombie:SetHealth(health)
+        end
+
+        return zombie
+    end
+
+    if not HZ.CanSpawn() then return nil end
+
+    local speed
+    if shambler then
+        speed = math.Rand(CV.sh_speed_lo:GetFloat(), max(CV.sh_speed_lo:GetFloat(), CV.sh_speed_hi:GetFloat()))
+    else
+        local variance = math.Clamp(CV.speed_var:GetFloat(), 0, 0.9)
+        speed = CV.runspeed:GetFloat() * math.Rand(1 - variance, 1 + variance)
+    end
+
+    local baseHealth = shambler and CV.sh_health:GetInt() or CV.health:GetInt()
+    local row = HZ.AddVirtual(pos, { shambler = shambler, speed = speed * speedScale, owner = opts.owner,
+        horde = opts.horde, omni = opts.omni,
+        maxHp = healthScale > 1 and math.Round(baseHealth * healthScale) or nil })
+
+    return nil, row
+end
+
+local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force)
+    local ent = PromoteRow(row, x, y, z)
+    if not ent then
+        DropRow(row, true)
+        return
+    end
+
+    timer.Simple(0.15, function()
+        if not IsValid(ent) or ent.hz_dead then return end
+
+        local dmgInfo = DamageInfo()
+        dmgInfo:SetDamage(max(dmg, ent:Health() + 10))
+        dmgInfo:SetDamageType(dmgType)
+        dmgInfo:SetAttacker(IsValid(attacker) and attacker or game.GetWorld())
+        dmgInfo:SetInflictor(IsValid(inflictor) and inflictor or (IsValid(attacker) and attacker or game.GetWorld()))
+        dmgInfo:SetDamagePosition(ent:WorldSpaceCenter())
+        dmgInfo:SetDamageForce(force)
+        ent:TakeDamageInfo(dmgInfo)
+    end)
+end
+
 hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     if HZ.VCount == 0 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
 
@@ -580,14 +785,16 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     local count = max(data.Num or 1, 1)
     local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
     local now = CurTime()
-    local hit, hitT
+    local hit, hitT, hitX, hitY, hitZ
     for _, row in pairs(rows) do
-        local x, y, z = PosAt(row, now)
+        local x, y, z = RowPos(row, now)
         local cx, cy, cz = x - sx, y - sy, z + 40 - sz
         local along = cx * dx + cy * dy + cz * dz
         if along > 0 and along < len and (not hitT or along < hitT) then
             local rad = 22 + min(spread * along, 60)
-            if cx * cx + cy * cy + cz * cz - along * along < rad * rad then hit, hitT = row, along end
+            if cx * cx + cy * cy + cz * cz - along * along < rad * rad then
+                hit, hitT, hitX, hitY, hitZ = row, along, x, y, z
+            end
         end
     end
 
@@ -596,11 +803,14 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     local hpMax = hit.shambler and CV.sh_health:GetFloat() or CV.health:GetFloat()
     hit.hp = hit.hp - dmg / max(hpMax, 1)
     if hit.hp <= 0 then
-        DropRow(hit, true)
+        local attacker = IsValid(data.Attacker) and data.Attacker or ent
+        local weapon = attacker.GetActiveWeapon and attacker:GetActiveWeapon() or nil
+        KillAsReal(hit, hitX, hitY, hitZ, attacker, weapon, dmg, DMG_BULLET, dir * 3000)
         FlushNet()
     end
 end)
 
+local BLAST_REAL_MAX = 12
 local nextBlast = 0
 hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
     if HZ.VCount == 0 or not dmg:IsExplosionDamage() then return end
@@ -609,21 +819,26 @@ hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
     if now < nextBlast then return end
 
     nextBlast = now + 0.1
-    local inflictor = dmg:GetInflictor()
+    local inflictor, attacker = dmg:GetInflictor(), dmg:GetAttacker()
     local center = IsValid(inflictor) and inflictor:GetPos() or dmg:GetDamagePosition()
     local rad = math.Clamp(dmg:GetDamage() * 2.5, 150, 450)
     local radiusSqr = rad * rad
-    local any
+    local amount = dmg:GetDamage()
+    local shown = 0
     for _, row in pairs(rows) do
-        local x, y, z = PosAt(row, now)
+        local x, y, z = RowPos(row, now)
         local dx, dy, dz = x - center.x, y - center.y, z - center.z
         if dx * dx + dy * dy + dz * dz < radiusSqr then
-            DropRow(row, true)
-            any = true
+            if shown < BLAST_REAL_MAX then
+                shown = shown + 1
+                KillAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400)
+            else
+                DropRow(row, true)
+            end
         end
     end
 
-    if any then FlushNet() end
+    FlushNet()
 end)
 
 net.Receive("hz_virt_sync", function(_, ply)
@@ -631,26 +846,42 @@ net.Receive("hz_virt_sync", function(_, ply)
     if (ply.hz_virtSync or 0) > now then return end
 
     ply.hz_virtSync = now + 5
-    local list = {}
-    for _, row in pairs(rows) do list[#list + 1] = row end
-    for i = 1, max(#list, 1), CHUNK do
-        local count = min(CHUNK, #list - i + 1)
+    local groupList, rowList = {}, {}
+    for _, group in pairs(groups) do
+        if not table.HasValue(pendGroupAdd, group) then groupList[#groupList + 1] = group end
+    end
+
+    for _, row in pairs(rows) do
+        if not table.HasValue(pendAdd, row) and not table.HasValue(pendGroupAdd, row.group) then
+            rowList[#rowList + 1] = row
+        end
+    end
+
+    local rowAt, sent = 1, false
+    while not sent or rowAt <= #rowList do
+        sent = true
         net.Start("hz_virt")
         net.WriteUInt(0, 16)
-        net.WriteUInt(count, 16)
-        for index = i, i + count - 1 do
-            local row = list[index]
-            local x, y, z = PosAt(row, now)
-            WriteAdd(row, x, y, z)
+        net.WriteUInt(0, 16)
+        local first = rowAt == 1
+        net.WriteUInt(first and #groupList or 0, 16)
+        if first then
+            for _, group in ipairs(groupList) do
+                local x, y, z = PosAt(group, now)
+                net.WriteUInt(group.id, 16)
+                WritePos(x, y, z)
+                net.WriteUInt(min(floor(group.speed), 1023), 10)
+            end
         end
 
+        local count = min(CHUNK, #rowList - rowAt + 1)
         net.WriteUInt(count, 16)
-        for index = i, i + count - 1 do
-            local row = list[index]
-            net.WriteUInt(row.id, 16)
-            net.WriteInt(ClampCoord(row.wx), 16)
-            net.WriteInt(ClampCoord(row.wy), 16)
-            net.WriteInt(ClampCoord(row.wz), 16)
+        for i = rowAt, rowAt + count - 1 do WriteRowAdd(rowList[i]) end
+        rowAt = rowAt + count
+        local last = rowAt > #rowList
+        net.WriteUInt(last and #groupList or 0, 16)
+        if last then
+            for _, group in ipairs(groupList) do WriteGroupMove(group) end
         end
 
         net.Send(ply)

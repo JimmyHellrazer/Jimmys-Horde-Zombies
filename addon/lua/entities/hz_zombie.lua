@@ -10,6 +10,8 @@ list.Set("NPC", "hz_zombie",
     { Name = "Infected", Class = "hz_zombie", Category = "Horde Zombies", IconOverride = "entities/hz_zombie.png" })
 
 if CLIENT then
+    language.Add("hz_zombie", "Infected")
+
     function ENT:Initialize()
         HZ.ClientRegister(self)
     end
@@ -89,6 +91,7 @@ function ENT:Initialize()
     self:SetCollisionBounds(Vector(-12, -12, 0), Vector(12, 12, 70))
     self:SetCollisionGroup(COLLISION_GROUP_NPC_SCRIPTED)
     self:AddFlags(FL_OBJECT)
+    self:SetBloodColor(BLOOD_COLOR_RED)
 
     local loco = self.loco
     loco:SetStepHeight(18)
@@ -1677,6 +1680,7 @@ function ENT:HZ_StuckCheck(now)
             local dest = nextArea:GetCenter() + Vector(0, 0, 4)
             local block = util.TraceHull({ start = pos + UP20, endpos = dest + UP20, mins = Vector(-12, -12, 0),
                 maxs = Vector(12, 12, 40), mask = MASK_NPCSOLID, filter = NO_ZOMBIES }).Entity
+
             if IsValid(block) and (HZ.IsBarricade(block) or block:GetClass():find("door", 1, true)) then return end
 
             self:SetPos(dest)

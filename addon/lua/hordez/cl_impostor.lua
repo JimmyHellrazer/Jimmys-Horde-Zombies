@@ -35,7 +35,7 @@ local function Layer(size, name, material)
     return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = Material(material),
         rt = GetRenderTargetEx(name, size, size, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, 0, 0,
         IMAGE_FORMAT_RGBA8888),
-        quads = {}, count = 0 }
+        buckets = {}, count = 0 }
 end
 
 local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor")
@@ -192,8 +192,21 @@ end)
 concommand.Add("hz_impostor_rebake", StartBake)
 
 local count = 0
-local builtAt, nextBuild = 0, 0
 local STRIDE = 15
+local BUCKETS = 8
+local BUCKET_QUADS = MAX_QUADS / BUCKETS
+local EPOCH_SPAN = 300
+local FADE_BAND = 0.85
+local FADE_PULL = 20
+local epoch = 0
+local nextBucket, nextBucketAt = 0, 0
+local bucketCounts = {}
+
+for _, layer in ipairs(LAYERS) do
+    for b = 0, BUCKETS - 1 do layer.buckets[b] = { quads = {}, count = 0 } end
+end
+
+for b = 0, BUCKETS - 1 do bucketCounts[b] = 0 end
 
 local atan2, floor, cos, sin, min, max = math.atan2, math.floor, math.cos, math.sin, math.min, math.max
 local PI = math.pi
@@ -201,9 +214,9 @@ local lightAt = Vector()
 
 local ex, ey, bright = 0, 0, 127.5
 
-local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist)
-    local layer = dist < NEAR_DIST and nearLayer or farLayer
-    local quads = layer.quads
+local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist, fade)
+    local target = (dist < NEAR_DIST and nearLayer or farLayer).buckets[bucket]
+    local quads = target.quads
     local variant
     if not moving then
         variant = female and V_IDLE_F or V_IDLE_M
@@ -226,9 +239,14 @@ local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female
         cache.hz_ilr, cache.hz_ilg, cache.hz_ilb = lr, lg, lb
     end
 
-    local base = layer.count * STRIDE
-    layer.count = layer.count + 1
-    quads[base + 1], quads[base + 2], quads[base + 3] = x, y, z
+    if fade < 1 then
+        x, y = x + cos(bearing) * FADE_PULL, y + sin(bearing) * FADE_PULL
+    end
+
+    local age = now - epoch
+    local base = target.count * STRIDE
+    target.count = target.count + 1
+    quads[base + 1], quads[base + 2], quads[base + 3] = x - vx * age, y - vy * age, z
     quads[base + 4], quads[base + 5] = -sin(bearing) * HALF_W, cos(bearing) * HALF_W
     quads[base + 6] = ((view % 4) * 8) * DU
     quads[base + 7] = (variant * 2 + (view >= 4 and 1 or 0)) * DV
@@ -238,33 +256,35 @@ local function EmitQuad(cache, now, x, y, z, vx, vy, moving, facing, idx, female
     quads[base + 12] = min(cache.hz_ilr * bright, 255)
     quads[base + 13] = min(cache.hz_ilg * bright, 255)
     quads[base + 14] = min(cache.hz_ilb * bright, 255)
-    quads[base + 15] = 255
+    quads[base + 15] = fade * 255
 end
 
-local function GatherQuads(now)
+local function GatherBucket(bucket, now)
     local list = HZ.ClientZombies
     local count = 0
     local want = cvOn:GetBool() and ready
-    local dist = cvDist:GetFloat()
-    local nearSqr, farSqr = (dist * 0.92) ^ 2, dist * dist
+    local fadeEnd = cvDist:GetFloat()
+    local fadeStart = fadeEnd * FADE_BAND
+    local fadeStartSqr = fadeStart * fadeStart
     local eye = EyePos()
     ex, ey = eye.x, eye.y
     local ez = eye.z
     bright = cvLight:GetFloat() * 127.5
 
-    farLayer.count, nearLayer.count = 0, 0
+    farLayer.buckets[bucket].count, nearLayer.buckets[bucket].count = 0, 0
 
     for i = 1, #list do
         local ent = list[i]
-        if IsValid(ent) then
+        if IsValid(ent) and ent:EntIndex() % BUCKETS == bucket then
             local distSqr = ent.hz_d2
             local impostor = want and distSqr and not ent.hz_ragdolled and not ent:IsDormant()
-                and distSqr > (ent.hz_imp and nearSqr or farSqr) and count < MAX_QUADS
+                and distSqr > fadeStartSqr and count < BUCKET_QUADS
 
             if not impostor then
-                if ent.hz_imp then ent.hz_imp, ent.hz_ipt = nil, nil end
+                if ent.hz_imp then ent.hz_imp, ent.hz_ipt, ent.hz_fade = nil, nil, nil end
             else
-                ent.hz_imp = true
+                local fade = min((distSqr ^ 0.5 - fadeStart) / max(fadeEnd - fadeStart, 1), 1)
+                ent.hz_imp, ent.hz_fade = true, fade
                 local pos = ent:GetPos()
                 local x, y, z = pos.x, pos.y, pos.z
                 local vx, vy = 0, 0
@@ -282,9 +302,9 @@ local function GatherQuads(now)
                     ent.hz_ifem = female
                 end
 
-                EmitQuad(ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
+                EmitQuad(bucket, ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
                     or ent:GetAngles().y * (PI / 180),
-                    ent:EntIndex(), female, ent:GetNW2Bool("hz_shambler"), distSqr ^ 0.5)
+                    ent:EntIndex(), female, ent:GetNW2Bool("hz_shambler"), distSqr ^ 0.5, fade)
 
                 count = count + 1
             end
@@ -294,16 +314,18 @@ local function GatherQuads(now)
     if ready then
         local posAt = HZ.VirtualAt
         for id, row in pairs(HZ.VirtualCl) do
-            if count >= MAX_QUADS then break end
+            if count >= BUCKET_QUADS then break end
 
-            local group = row.group
-            local x, y, z = posAt(row, now)
-            local moving = now < group.t1
-            local dx, dy, dz = x - ex, y - ey, z - ez
-            EmitQuad(row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving, group.yaw, id,
-                row.female, row.shambler, (dx * dx + dy * dy + dz * dz) ^ 0.5)
+            if id % BUCKETS == bucket then
+                local group = row.group
+                local x, y, z = posAt(row, now)
+                local moving = now < group.t1
+                local dx, dy, dz = x - ex, y - ey, z - ez
+                EmitQuad(bucket, row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
+                    group.yaw, id, row.female, row.shambler, (dx * dx + dy * dy + dz * dz) ^ 0.5, 1)
 
-            count = count + 1
+                count = count + 1
+            end
         end
     end
 
@@ -312,9 +334,9 @@ end
 
 local Position, TexCoord, Color, AdvanceVertex = mesh.Position, mesh.TexCoord, mesh.Color, mesh.AdvanceVertex
 
-local function FillMesh(layer)
-    local quads, inset = layer.quads, layer.inset
-    for i = 0, layer.count - 1 do
+local function FillMesh(bucket, inset)
+    local quads = bucket.quads
+    for i = 0, bucket.count - 1 do
         local base = i * STRIDE
         local x, y, z, rx, ry = quads[base + 1], quads[base + 2], quads[base + 3], quads[base + 4], quads[base + 5]
         local u0, v0 = quads[base + 6] + inset, quads[base + 7] + inset
@@ -348,35 +370,52 @@ local function FillMesh(layer)
     end
 end
 
-local function RebuildMesh(now)
-    local ok, quadCount = pcall(GatherQuads, now)
+local function RebuildBucket(b, now)
+    local ok, quadCount = pcall(GatherBucket, b, now)
     if not ok then
         ErrorNoHalt("[hordez] impostor rebuild failed: " .. tostring(quadCount) .. "\n")
         quadCount = 0
-        farLayer.count, nearLayer.count = 0, 0
+        farLayer.buckets[b].count, nearLayer.buckets[b].count = 0, 0
     end
 
-    count = quadCount
+    count = count - bucketCounts[b] + quadCount
+    bucketCounts[b] = quadCount
     for _, layer in ipairs(LAYERS) do
-        if layer.imesh then
-            layer.imesh:Destroy()
-            layer.imesh = nil
+        local bucket = layer.buckets[b]
+        if bucket.imesh then
+            bucket.imesh:Destroy()
+            bucket.imesh = nil
         end
 
-        if layer.count > 0 then
-            layer.imesh = Mesh(layer.mat)
-            mesh.Begin(layer.imesh, MATERIAL_QUADS, layer.count)
-            local filled, err = pcall(FillMesh, layer)
+        if bucket.count > 0 then
+            bucket.imesh = Mesh(layer.mat)
+            mesh.Begin(bucket.imesh, MATERIAL_QUADS, bucket.count)
+            local filled, err = pcall(FillMesh, bucket, layer.inset)
             mesh.End()
             if not filled then
                 ErrorNoHalt("[hordez] impostor mesh failed: " .. tostring(err) .. "\n")
-                layer.imesh:Destroy()
-                layer.imesh = nil
+                bucket.imesh:Destroy()
+                bucket.imesh = nil
             end
         end
     end
+end
 
-    builtAt = now
+local function Rebuild(now)
+    if now - epoch > EPOCH_SPAN then
+        epoch = now
+        for b = 0, BUCKETS - 1 do RebuildBucket(b, now) end
+
+        nextBucketAt = now + REBUILD / BUCKETS
+
+        return
+    end
+
+    if now < nextBucketAt then return end
+
+    nextBucketAt = now + REBUILD / BUCKETS
+    RebuildBucket(nextBucket, now)
+    nextBucket = (nextBucket + 1) % BUCKETS
 end
 
 local carrier
@@ -394,6 +433,12 @@ local function ShaderClock(since, clock)
             layer.mat:SetFloat("$c0_y", (g / 255) ^ 2.2)
             layer.mat:SetFloat("$c0_z", (b / 255) ^ 2.2)
         end
+    end
+
+    local w, h = ScrW(), ScrH()
+    for _, layer in ipairs(LAYERS) do
+        layer.mat:SetFloat("$c1_x", w)
+        layer.mat:SetFloat("$c1_y", h)
     end
 
     if not IsValid(carrier) then
@@ -415,23 +460,20 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     if depth or sky or sky3d then return end
 
     local now = CurTime()
-    if now >= nextBuild then
-        nextBuild = now + REBUILD
-        if not ready and not bakeAt and ((cvOn:GetBool() and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
-            StartBake()
-        end
-
-        RebuildMesh(now)
+    if not ready and not bakeAt and ((cvOn:GetBool() and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
+        StartBake()
     end
 
-    if not farLayer.imesh and not nearLayer.imesh then return end
+    Rebuild(now)
+    if count == 0 then return end
 
-    ShaderClock(now - builtAt, now % 4096)
+    ShaderClock(now - epoch, now % 4096)
     render.OverrideDepthEnable(true, true)
     for _, layer in ipairs(LAYERS) do
-        if layer.imesh then
-            render.SetMaterial(layer.mat)
-            layer.imesh:Draw()
+        render.SetMaterial(layer.mat)
+        for b = 0, BUCKETS - 1 do
+            local imesh = layer.buckets[b].imesh
+            if imesh then imesh:Draw() end
         end
     end
 
@@ -453,9 +495,14 @@ end)
 
 hook.Add("PostCleanupMap", "hordez_impostors", function()
     for _, layer in ipairs(LAYERS) do
-        if layer.imesh then layer.imesh:Destroy() end
-        layer.imesh, layer.count = nil, 0
+        for b = 0, BUCKETS - 1 do
+            local bucket = layer.buckets[b]
+            if bucket.imesh then bucket.imesh:Destroy() end
+            bucket.imesh, bucket.count = nil, 0
+        end
     end
+
+    for b = 0, BUCKETS - 1 do bucketCounts[b] = 0 end
 
     count = 0
 end)

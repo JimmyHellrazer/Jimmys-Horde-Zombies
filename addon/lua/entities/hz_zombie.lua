@@ -16,10 +16,19 @@ if CLIENT then
         HZ.ClientRegister(self)
     end
 
-    function ENT:Draw()
-        if self.hz_ragdolled or self.hz_far or self.hz_imp then return end
+    local SHADOW_DEPTH = STUDIO_SHADOWDEPTHTEXTURE or 0x40000000
+    local cvDepthDist = CreateClientConVar("hz_depth_dist", "1200", true, false,
+        "Zombies beyond this range are left out of flashlight and projected texture shadows (0 = never)")
 
-        self:DrawModel()
+    function ENT:Draw(flags)
+        if self.hz_ragdolled or self.hz_far or (self.hz_imp and (self.hz_fade or 1) >= 1) then return end
+
+        if flags and bit.band(flags, SHADOW_DEPTH) ~= 0 then
+            local depthDist = cvDepthDist:GetFloat()
+            if depthDist > 0 and (self.hz_d2 or 0) > depthDist * depthDist then return end
+        end
+
+        self:DrawModel(flags)
     end
 
     return
@@ -1267,6 +1276,7 @@ function ENT:HZ_Brain(now)
         or flowDist > best + 600)) then
         self.hz_bestFlow, self.hz_progressAt = flowDist, now
     end
+
     local target = (flowTarget and HZ.IsHostile(flowTarget)) and flowTarget or nil
     local near, nearDist = self:HZ_NearestTarget(pos)
     if near and (not target or nearDist < 300) then target = near end
@@ -1393,7 +1403,7 @@ function ENT:HZ_Brain(now)
             local flankGoal = goal + Vector(-to.y, to.x, 0) * lateral
             if not HullTrace(pos + UP20, flankGoal + UP20, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit
                 and not HullTrace(flankGoal + UP20, targetPos + UP20, FLANK_MINS, FLANK_MAXS,
-                    MASK_NPCSOLID_BRUSHONLY).Hit then
+                MASK_NPCSOLID_BRUSHONLY).Hit then
                 goal = flankGoal
             end
         end

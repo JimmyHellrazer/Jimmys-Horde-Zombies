@@ -13,6 +13,7 @@ struct VS_OUTPUT {
 	float2 uv       : TEXCOORD0;
 	float4 color    : COLOR0;
 	float  fog      : TEXCOORD1;
+	float3 screen   : TEXCOORD2;
 };
 
 #define CELL_U 0.03125
@@ -32,6 +33,7 @@ VS_OUTPUT main(VS_INPUT vert) {
 	o.proj_pos = mul(float4(world_pos, 1), cViewProj);
 	o.uv = float2(vert.vUV.x + frame * CELL_U, vert.vUV.y);
 	o.color = vert.vColor;
+	o.screen = o.proj_pos.xyw;
 	float fog_end = cAmbientCubeX[1].x;
 	float fog_range = max(cAmbientCubeX[1].y, 1.0);
 	float fog_max = cAmbientCubeX[1].z;

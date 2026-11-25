@@ -1,0 +1,15 @@
+"VertexLitGeneric"
+{
+	// Original shader: VertexLitTexture
+	"$basetexture" 	"models\bloocobalt\citizens\female\rebel_sheet"
+
+	"$halflambert" 1
+
+
+
+
+
+
+
+
+}

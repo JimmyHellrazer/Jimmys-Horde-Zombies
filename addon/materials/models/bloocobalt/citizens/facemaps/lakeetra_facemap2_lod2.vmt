@@ -1,0 +1,16 @@
+"VertexLitGeneric"
+{
+	// Original shader: VertexLitTexture
+	"$basetexture" "models\bloocobalt\citizens\facemaps\lakeetra_facemap2"
+
+	"$halflambert" 1
+
+
+
+
+
+
+
+
+
+}

@@ -12,6 +12,8 @@ ORIG="$ROOT/tools/models_original"
 w() { echo "Z:${1//\//\\}"; }
 
 mkdir -p "$WORK/game" "$ORIG"
+ln -sfn "$ROOT/addon/materials" "$WORK/game/materials"
+python3 "$ROOT/tools/lod_materials.py" "$ROOT/addon/materials/models/bloocobalt/citizens"
 printf '"GameInfo"\n{\n\tgame "lodbuild"\n\tFileSystem\n\t{\n\t\tSteamAppId 4000\n\t\tSearchPaths\n\t\t{\n\t\t\tgame |gameinfo_path|.\n\t\t}\n\t}\n}\n' > "$WORK/game/gameinfo.txt"
 
 names=("$@")

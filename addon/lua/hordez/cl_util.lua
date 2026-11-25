@@ -219,7 +219,33 @@ local cvCrowd = CreateClientConVar("hz_crowd_lod", "1", true, false,
 local cvCrowdHide = CreateClientConVar("hz_crowd_hide", "0", true, false,
     "Zombies with at least this many rows of others in front of them are not drawn at all. 0 = always draw")
 
+local cvOcclude = CreateClientConVar("hz_occlusion", "1", true, false,
+    "Skip drawing zombies hidden behind world geometry")
+
 local REF_TAN = math.tan(math.rad(75 / 2))
+local OCCLUDE_FROM = 300 * 300
+local OCCLUDE_PASSES = 2
+local LOOK_AHEAD = 0.3
+local occludeOut = {}
+local occludeIn = { mask = CONTENTS_SOLID, output = occludeOut }
+local headOffset, feetOffset = Vector(0, 0, 64), Vector(0, 0, 8)
+
+local function Blocked(from, to)
+    occludeIn.start, occludeIn.endpos = from, to
+    util.TraceLine(occludeIn)
+
+    return occludeOut.Hit and occludeOut.HitWorld
+end
+
+local function Hidden(ent, eye, eyeAhead)
+    local pos = ent:GetPos()
+    if not Blocked(eye, pos + headOffset) or not Blocked(eye, pos + feetOffset) then return false end
+
+    local ahead = pos + ent:GetVelocity() * LOOK_AHEAD
+
+    return Blocked(eyeAhead, ahead + headOffset) and Blocked(eyeAhead, ahead + feetOffset)
+end
+
 local pass = 0
 
 local CELLS = 720
@@ -283,6 +309,8 @@ timer.Create("hordez_detail", 0.25, 0, function()
     if not IsValid(ply) then return end
 
     local eye = EyePos()
+    local occlude = cvOcclude:GetBool()
+    local eyeAhead = eye + ply:GetVelocity() * LOOK_AHEAD
     local zoom = math.tan(math.rad(math.Clamp(ply:GetFOV(), 5, 150) / 2)) / REF_TAN
     zoom = zoom * zoom
     local lod = cvLod:GetFloat()
@@ -330,7 +358,16 @@ timer.Create("hordez_detail", 0.25, 0, function()
                     end
                 end
 
-                ent.hz_far = ((drawDist > 0 and distSqr > drawDistSqr) or (hide > 0 and covered >= hide)) or nil
+                local hidden = false
+                if occlude and not ent.hz_imp and ent:GetPos():DistToSqr(eye) > OCCLUDE_FROM then
+                    ent.hz_occ = Hidden(ent, eye, eyeAhead) and (ent.hz_occ or 0) + 1 or 0
+                    hidden = ent.hz_occ >= OCCLUDE_PASSES
+                else
+                    ent.hz_occ = 0
+                end
+
+                ent.hz_far = ((drawDist > 0 and distSqr > drawDistSqr) or (hide > 0 and covered >= hide) or hidden)
+                    or nil
             end
         end
     end

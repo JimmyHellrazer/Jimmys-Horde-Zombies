@@ -1,0 +1,10 @@
+"VertexLitGeneric"
+{
+	// Original shader: VertexLitTexture
+	"$basetexture" "models\bloocobalt\citizens\citizen_sheet"
+
+	"$halflambert" 1
+
+
+
+}

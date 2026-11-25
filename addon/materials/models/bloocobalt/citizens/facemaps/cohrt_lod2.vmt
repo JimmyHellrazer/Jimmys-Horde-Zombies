@@ -1,0 +1,12 @@
+"VertexLitGeneric"
+{
+	// Original shader: VertexLitTexture
+	"$basetexture" "models\bloocobalt\citizens\facemaps\cohrt"
+
+
+	"$halflambert" 1
+
+
+
+
+}

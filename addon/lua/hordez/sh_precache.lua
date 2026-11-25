@@ -28,12 +28,56 @@ function HZ.PrecacheModel(path)
     end
 end
 
+local warmQueue = {}
+local warmTarget
+
+local function WarmNext()
+    local model = table.remove(warmQueue, 1)
+    if not model then
+        hook.Remove("PostRender", "hordez_warm")
+
+        return
+    end
+
+    local ent = ClientsideModel(model, RENDERGROUP_OPAQUE)
+    if IsValid(ent) then
+        ent:SetNoDraw(true)
+        ent:SetPos(vector_origin)
+        warmTarget = warmTarget or GetRenderTarget("hordez_warm", 64, 64)
+        render.PushRenderTarget(warmTarget)
+        cam.Start3D(Vector(-120, 0, 40), angle_zero, 60, 0, 0, 64, 64)
+        for lod = 0, 3 do
+            ent:SetLOD(lod)
+            ent:SetupBones()
+            ent:DrawModel()
+        end
+
+        cam.End3D()
+        render.PopRenderTarget()
+        ent:Remove()
+    end
+
+    local ragdoll = ClientsideRagdoll(model)
+    if IsValid(ragdoll) then
+        ragdoll:SetNoDraw(true)
+        ragdoll:Remove()
+    end
+end
+
 function HZ.Precache()
     if done then return end
 
     done = true
     local t0 = SysTime()
     for i = 1, #models do util.PrecacheModel(models[i]) end
+    if CLIENT then
+        for i = 1, #models do
+            if models[i]:find("/citizens/", 1, true) then warmQueue[#warmQueue + 1] = models[i] end
+        end
+
+        hook.Add("PostRender", "hordez_warm", WarmNext)
+    end
+
     for i = 1, #sounds do util.PrecacheSound(sounds[i]) end
     if HZ.CV.debug:GetBool() then
         print(("[hordez] precached %d models and %d sounds in %.0f ms"):format(#models, #sounds,

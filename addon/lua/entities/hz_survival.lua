@@ -372,7 +372,7 @@ function ENT:Think()
         local rate = math.min(HELL_RATE0 + HELL_RAMP * minutes, HELL_RATE_MAX)
         self.hellBank = math.min(self.hellBank + rate * 0.25, math.max(bankMax, self.hellBank))
         if self.hellBank >= 1 then
-            self.hellBank = self.hellBank - self:SpawnSome(math.floor(self.hellBank))
+            self.hellBank = self.hellBank - self:SpawnSome(math.min(4, math.floor(self.hellBank)))
         end
 
         return true

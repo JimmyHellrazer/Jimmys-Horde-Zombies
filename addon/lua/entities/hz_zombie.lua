@@ -454,6 +454,11 @@ end
 function ENT:BodyUpdate()
     if self.hz_frozen then return end
 
+    if not self.hz_dead and self:Health() <= 0 then
+        self:OnKilled(DamageInfo())
+        return
+    end
+
     self:HZ_BurnTick()
     local moving = self.hz_moveAnim
     local watch = CurTime() - (self.hz_wpT or 0) >= 0.06
@@ -2218,6 +2223,11 @@ function ENT:HZ_LocalDir(push)
 end
 
 function ENT:OnInjured(dmg)
+    if self:Health() <= 0 then
+        if not self.hz_dead then self:OnKilled(dmg) end
+        return
+    end
+
     local now = CurTime()
     local attacker = dmg:GetAttacker()
     if HZ.IsHostile(attacker) then

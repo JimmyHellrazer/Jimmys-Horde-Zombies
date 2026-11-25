@@ -195,6 +195,7 @@ function ENT:SpawnHordeBatch()
 
     if #self.sources == 0 then return end
 
+    local realSpawned = 0
     for _ = 1, math.min(4, self.hordeLeft) do
         if not self:CanOwnMore() then return end
 
@@ -208,9 +209,11 @@ function ENT:SpawnHordeBatch()
         if zombie then
             self:Own(zombie, true)
             self.hordeSpawned[zombie] = true
+            realSpawned = realSpawned + 1
         end
 
         self.hordeLeft = self.hordeLeft - 1
+        if realSpawned >= 2 then return end
     end
 end
 

@@ -34,35 +34,63 @@ function ENT:SpawnGroup()
     local radius = math.Clamp(60 + count * 12, 80, 600)
     local alerted = HZ.CV.horde_alert:GetBool()
     local areas = navmesh.Find(pos, radius, 48, 48)
-    local spawned = {}
-    for _ = 1, count do
-        local spawnPos
-        local area = HZ.Pick(areas)
-        if area then
-            local point = area:GetRandomPoint()
-            if point:DistToSqr(pos) <= radius * radius then spawnPos = point + Vector(0, 0, 4) end
-        end
-
-        spawnPos = spawnPos or GroundPoint(pos, radius)
-        local zombie = HZ.SpawnZombie(spawnPos, nil, { idle = "random", alerted = alerted, shambler = self.hz_shamblers
-            or false })
-
-        if not IsValid(zombie) then break end
-
-        spawned[#spawned + 1] = zombie
-    end
-
+    local shamblers = self.hz_shamblers or false
     local ply = self:GetCreator()
-    if IsValid(ply) and #spawned > 0 then
-        undo.Create(self.PrintName)
-        for _, zombie in ipairs(spawned) do undo.AddEntity(zombie) end
-        undo.SetPlayer(ply)
-        undo.Finish()
-        for _, zombie in ipairs(spawned) do ply:AddCleanup("npcs", zombie) end
-        if #spawned < count then
-            ply:ChatPrint(("[hordez] spawned %d/%d (hz_max_total reached)"):format(#spawned, count))
+    local name = self.PrintName
+    local spawned = {}
+    local done = 0
+    local timerId = "hordez_group_" .. self:EntIndex()
+
+    local function Finish()
+        timer.Remove(timerId)
+        if IsValid(ply) and #spawned > 0 then
+            undo.Create(name)
+            for _, zombie in ipairs(spawned) do
+                if IsValid(zombie) then undo.AddEntity(zombie) end
+            end
+
+            undo.SetPlayer(ply)
+            undo.Finish()
+            for _, zombie in ipairs(spawned) do
+                if IsValid(zombie) then ply:AddCleanup("npcs", zombie) end
+            end
+
+            if #spawned < count then
+                ply:ChatPrint(("[hordez] spawned %d/%d (hz_max_total reached)"):format(#spawned, count))
+            end
         end
+
+        if IsValid(self) then self:Remove() end
     end
 
-    SafeRemoveEntityDelayed(self, 0)
+    local function Step()
+        for _ = 1, 2 do
+            if done >= count then
+                Finish()
+                return
+            end
+
+            local spawnPos
+            local area = HZ.Pick(areas)
+            if area then
+                local point = area:GetRandomPoint()
+                if point:DistToSqr(pos) <= radius * radius then spawnPos = point + Vector(0, 0, 4) end
+            end
+
+            spawnPos = spawnPos or GroundPoint(pos, radius)
+            local zombie = HZ.SpawnZombie(spawnPos, nil, { idle = "random", alerted = alerted, shambler = shamblers })
+            if not IsValid(zombie) then
+                Finish()
+                return
+            end
+
+            spawned[#spawned + 1] = zombie
+            done = done + 1
+        end
+
+        if done >= count then Finish() end
+    end
+
+    Step()
+    if done < count then timer.Create(timerId, 0.03, 0, Step) end
 end

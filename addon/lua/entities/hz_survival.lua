@@ -278,6 +278,7 @@ function ENT:SpawnSome(count)
     end
 
     local cap = self:AliveCap()
+    local realSpawned = 0
     for _ = 1, count do
         if self:AliveCount() >= cap or not HZ.CanSpawn() then break end
 
@@ -289,8 +290,13 @@ function ENT:SpawnSome(count)
 
         if not IsValid(zombie) and not row then break end
 
-        if zombie then self.owned[zombie] = true end
+        if zombie then
+            self.owned[zombie] = true
+            realSpawned = realSpawned + 1
+        end
+
         done = done + 1
+        if realSpawned >= 2 then break end
     end
 
     return done

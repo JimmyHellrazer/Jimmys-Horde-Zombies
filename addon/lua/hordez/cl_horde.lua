@@ -4,12 +4,105 @@ CreateClientConVar("hz_show_markers", "0", true, false,
     "Always draw director/spawner markers (otherwise only with physgun/toolgun)")
 
 local rags = {}
+local ragPool, ragPoolCount = {}, 0
+local RAG_POOL_MAX = 48
+local csmPool, csmPoolCount = {}, 0
+local CSM_POOL_MAX = 24
+local physBones = {}
 
 local M = HZ.Math
 local CopyBoneSafe, CopyBone, MatrixPos = M.CopyBoneSafe, M.CopyBone, M.MatrixPos
 local sqrt = math.sqrt
 local cvDebug = GetConVar("hz_debug")
 local boneMat, boneMatB = Matrix(), Matrix()
+
+local function ClearFlex(ent)
+    local count = ent:GetFlexNum()
+    for i = 0, count - 1 do
+        if ent:GetFlexWeight(i) > 0.01 then ent:SetFlexWeight(i, 0) end
+    end
+end
+
+local function CachePhysBones(rag, mdl)
+    local ragBones = physBones[mdl]
+    if ragBones then return ragBones end
+
+    ragBones = {}
+    for i = 0, rag:GetPhysicsObjectCount() - 1 do ragBones[i + 1] = rag:TranslatePhysBoneToBone(i) or -1 end
+    physBones[mdl] = ragBones
+
+    return ragBones
+end
+
+local burning = {}
+
+local function StopBurn(ent)
+    for i = #burning, 1, -1 do
+        local burn = burning[i]
+        if burn.ent == ent then
+            if burn.snd then burn.snd:FadeOut(0.4) end
+            table.remove(burning, i)
+        end
+    end
+end
+
+local function ParkRagdoll(rag)
+    StopBurn(rag)
+    rag:SetNoDraw(true)
+    rag:DrawShadow(false)
+    rag:DestroyShadow()
+    ClearFlex(rag)
+    for i = 0, rag:GetPhysicsObjectCount() - 1 do
+        local phys = rag:GetPhysicsObjectNum(i)
+        if IsValid(phys) then
+            phys:EnableMotion(false)
+            phys:EnableCollisions(false)
+            phys:SetVelocity(vector_origin)
+            if phys.SetAngleVelocityInstantaneous then phys:SetAngleVelocityInstantaneous(vector_origin) end
+            phys:Sleep()
+        end
+    end
+end
+
+local function ReleaseRagdoll(rag, mdl)
+    if not IsValid(rag) then return end
+
+    mdl = mdl or rag:GetModel()
+    if mdl and ragPoolCount < RAG_POOL_MAX then
+        ParkRagdoll(rag)
+        local bucket = ragPool[mdl]
+        if not bucket then
+            bucket = {}
+            ragPool[mdl] = bucket
+        end
+
+        bucket[#bucket + 1] = rag
+        ragPoolCount = ragPoolCount + 1
+    else
+        rag:Remove()
+    end
+end
+
+function HZ.SeedRagdollPool(mdl, rag)
+    if not IsValid(rag) then return end
+
+    CachePhysBones(rag, mdl)
+    ReleaseRagdoll(rag, mdl)
+end
+
+local function AcquireRagdoll(mdl)
+    local bucket = ragPool[mdl]
+    if bucket then
+        while #bucket > 0 do
+            local rag = bucket[#bucket]
+            bucket[#bucket] = nil
+            ragPoolCount = ragPoolCount - 1
+            if IsValid(rag) then return rag, true end
+        end
+    end
+
+    return ClientsideRagdoll(mdl), false
+end
 
 local function PruneRagdolls()
     local now = CurTime()
@@ -18,7 +111,7 @@ local function PruneRagdolls()
         local rag = rags[i]
         if not IsValid(rag.ent) then gone = gone + 1 end
         if not IsValid(rag.ent) or now > rag.die then
-            if IsValid(rag.ent) then rag.ent:Remove() end
+            ReleaseRagdoll(rag.ent, rag.mdl)
             table.remove(rags, i)
         end
     end
@@ -29,7 +122,7 @@ local function PruneRagdolls()
 
     while #rags > maxRags:GetInt() do
         local rag = table.remove(rags, 1)
-        if IsValid(rag.ent) then rag.ent:Remove() end
+        ReleaseRagdoll(rag.ent, rag.mdl)
     end
 end
 
@@ -53,21 +146,12 @@ local function CopyFlex(from, to)
     end
 end
 
-local physBones = {}
-
 local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
-    local rag = ClientsideRagdoll(mdl)
+    local rag, pooled = AcquireRagdoll(mdl)
     if not IsValid(rag) then return end
 
-    local ragBones = physBones[mdl]
-    if not ragBones then
-        ragBones = {}
-        for i = 0, rag:GetPhysicsObjectCount() - 1 do ragBones[i + 1] = rag:TranslatePhysBoneToBone(i) or -1 end
-        physBones[mdl] = ragBones
-    end
+    local ragBones = CachePhysBones(rag, mdl)
 
-    rag:SetNoDraw(false)
-    rag:DrawShadow(true)
     rag:SetSkin(skin)
     rag:SetColor(src:GetColor())
     CopyFlex(src, rag)
@@ -80,6 +164,11 @@ local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
         local bone = ragBones[i + 1]
         local mat = CopyBoneSafe(src, bone, boneMat)
         if IsValid(phys) then
+            if pooled then
+                phys:EnableCollisions(true)
+                phys:EnableMotion(true)
+            end
+
             if mat then
                 phys:SetPos(mat:GetTranslation())
                 phys:SetAngles(mat:GetAngles())
@@ -87,12 +176,21 @@ local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
                 phys:SetPos(src:GetPos() + Vector(0, 0, 36))
             end
 
-            phys:SetVelocity((vels and bone and vels[bone] or baseVel) + push)
+            local vel = (vels and bone and vels[bone] or baseVel) + push
+            if phys.SetVelocityInstantaneous then
+                phys:SetVelocityInstantaneous(vel)
+            else
+                phys:SetVelocity(vel)
+            end
+
+            if phys.SetAngleVelocityInstantaneous then phys:SetAngleVelocityInstantaneous(vector_origin) end
             phys:Wake()
         end
     end
 
-    rags[#rags + 1] = { ent = rag, die = CurTime() + ragTime:GetFloat() }
+    rag:SetNoDraw(false)
+    rag:DrawShadow(true)
+    rags[#rags + 1] = { ent = rag, mdl = mdl, die = CurTime() + ragTime:GetFloat() }
     PruneRagdolls()
 
     return rag
@@ -169,6 +267,40 @@ end
 
 local PELVIS_MINS, PELVIS_MAXS = Vector(-5, -5, -5), Vector(5, 5, 5)
 
+local function ReleaseDeathModel(csm, mdl, kicks)
+    if not IsValid(csm) then return end
+
+    StopBurn(csm)
+    csm.hz_death = nil
+    if kicks then
+        for bone in pairs(kicks) do csm:ManipulateBoneAngles(bone, angle_zero) end
+    end
+
+    mdl = mdl or csm:GetModel()
+    if mdl and csmPoolCount < CSM_POOL_MAX then
+        csm:SetNoDraw(true)
+        csm:DrawShadow(false)
+        csm:DestroyShadow()
+        ClearFlex(csm)
+        local bucket = csmPool[mdl]
+        if not bucket then
+            bucket = {}
+            csmPool[mdl] = bucket
+        end
+
+        bucket[#bucket + 1] = csm
+        csmPoolCount = csmPoolCount + 1
+    else
+        csm:Remove()
+    end
+end
+
+function HZ.SeedDeathModelPool(mdl, csm)
+    if not IsValid(csm) then return end
+
+    ReleaseDeathModel(csm, mdl)
+end
+
 local function FinishDeath(death)
     local vels
     if death.hasPrev and death.dt > 0 then
@@ -192,7 +324,8 @@ local function FinishDeath(death)
 
     local rag = MakeRagdoll(death.csm, death.mdl, death.skin, death.groups, vector_origin, vector_origin, vels)
     if IsValid(rag) then HZ.MoveBurn(death.csm, rag) end
-    death.csm:Remove()
+    ReleaseDeathModel(death.csm, death.mdl, death.kicks)
+    death.csm = nil
 
     return rag
 end
@@ -259,6 +392,23 @@ local function TrackedBones(ent, mdl)
     return bones, pelvisAt
 end
 
+local function AcquireDeathModel(mdl)
+    local bucket = csmPool[mdl]
+    if bucket then
+        while #bucket > 0 do
+            local csm = bucket[#bucket]
+            bucket[#bucket] = nil
+            csmPoolCount = csmPoolCount - 1
+            if IsValid(csm) then
+                csm:SetNoDraw(false)
+                return csm
+            end
+        end
+    end
+
+    return ClientsideModel(mdl, RENDERGROUP_OPAQUE)
+end
+
 local function StartDeath(ent, kind, dir, groups, vel)
     if not deathAnims:GetBool() or kind == HZ.DEATH_RAGDOLL or #dying >= deathMax:GetInt() then return false end
     if ent:GetPos():DistToSqr(EyePos()) > deathDist:GetFloat() ^ 2 then return false end
@@ -267,7 +417,8 @@ local function StartDeath(ent, kind, dir, groups, vel)
     local pick = PickDeath(pools, kind, dir)
     if not pick then return false end
 
-    local deathModel = ClientsideModel(ent:GetModel(), RENDERGROUP_OPAQUE)
+    local mdl = ent:GetModel()
+    local deathModel = AcquireDeathModel(mdl)
     if not IsValid(deathModel) then return false end
 
     deathModel:SetSkin(ent:GetSkin())
@@ -303,7 +454,6 @@ local function StartDeath(ent, kind, dir, groups, vel)
     if ends and math.random() < 0.75 then stop = math.min(HZ.Pick(ends) / 30, dur) end
     stop = math.min(stop, 2.5)
 
-    local mdl = ent:GetModel()
     local bones, pelvisAt = TrackedBones(deathModel, mdl)
     dying[#dying + 1] = {
         csm = deathModel, mdl = mdl, skin = ent:GetSkin(), groups = groups,
@@ -316,7 +466,11 @@ local function StartDeath(ent, kind, dir, groups, vel)
     }
 
     deathModel.hz_death = dying[#dying]
-    deathModel:AddCallback("BuildBonePositions", BlendBones)
+    if not deathModel.hz_blendHook then
+        deathModel.hz_blendHook = true
+        deathModel:AddCallback("BuildBonePositions", BlendBones)
+    end
+
     deathModel:SetupBones()
 
     return true
@@ -437,7 +591,7 @@ end
 local function SafeFinish(death)
     local ok, result = pcall(FinishDeath, death)
     if not ok then ReportOnce("hand-off", result) end
-    if IsValid(death.csm) then death.csm:Remove() end
+    if IsValid(death.csm) then ReleaseDeathModel(death.csm, death.mdl, death.kicks) end
 
     return ok and result or nil
 end
@@ -491,7 +645,6 @@ net.Receive("hz_rag", function()
 end)
 
 local burnMax = CreateClientConVar("hz_burn_max", "10", true, false, "Max burning zombie bodies at once")
-local burning = {}
 local FLAME_BONES = { "Bip01_Pelvis", "Bip01_Spine2", "Bip01_Head1", "Bip01_L_Forearm", "Bip01_R_Forearm",
     "Bip01_L_UpperArm", "Bip01_R_UpperArm", "Bip01_L_Thigh", "Bip01_R_Thigh", "Bip01_L_Calf", "Bip01_R_Calf" }
 
@@ -949,6 +1102,20 @@ hook.Add("PostCleanupMap", "hordez_rags", function()
     end
 
     rags = {}
+    for _, bucket in pairs(ragPool) do
+        for _, rag in ipairs(bucket) do
+            if IsValid(rag) then rag:Remove() end
+        end
+    end
+
+    ragPool, ragPoolCount = {}, 0
+    for _, bucket in pairs(csmPool) do
+        for _, csm in ipairs(bucket) do
+            if IsValid(csm) then csm:Remove() end
+        end
+    end
+
+    csmPool, csmPoolCount = {}, 0
     for _, burn in ipairs(burning) do
         if burn.snd then burn.snd:Stop() end
     end

@@ -601,8 +601,8 @@ timer.Create("hordez_virtual_cover", 1, 0, function()
     CoverPass()
 end)
 
-local PROMOTE_PER_PASS = 5
-local SWAP_PER_PASS = 6
+local PROMOTE_PER_PASS = 2
+local SWAP_PER_PASS = 2
 local waiting = {}
 
 local function ByDist(a, b)

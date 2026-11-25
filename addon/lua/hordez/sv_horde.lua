@@ -582,24 +582,35 @@ function HZ.MeleeArc(attacker, first, dmg)
 
     if #hit == 0 then return end
 
-    HZ.ArcBusy = true
-    for _, entry in ipairs(hit) do
-        local zombie, offset = entry[1], entry[2]
-        if amount > 0 then
-            local dmgInfo = DamageInfo()
-            dmgInfo:SetDamage(amount)
-            dmgInfo:SetDamageType(dtype)
-            dmgInfo:SetAttacker(attacker)
-            dmgInfo:SetInflictor(inflictor)
-            dmgInfo:SetDamagePosition(zombie:WorldSpaceCenter())
-            dmgInfo:SetDamageForce(offset:GetNormalized() * force)
-            zombie:TakeDamageInfo(dmgInfo)
-        end
+    timer.Simple(0, function()
+        if not IsValid(attacker) then return end
 
-        if IsValid(zombie) and not zombie.hz_dead then zombie:HZ_ExternalPush(offset, true) end
-    end
+        HZ.ArcBusy = true
+        local ok, err = pcall(function()
+            local inf = IsValid(inflictor) and inflictor or attacker
+            for _, entry in ipairs(hit) do
+                local zombie, offset = entry[1], entry[2]
+                if IsValid(zombie) and not zombie.hz_dead then
+                    if amount > 0 then
+                        local dmgInfo = DamageInfo()
+                        dmgInfo:SetDamage(amount)
+                        dmgInfo:SetDamageType(dtype)
+                        dmgInfo:SetAttacker(attacker)
+                        dmgInfo:SetInflictor(inf)
+                        dmgInfo:SetDamagePosition(zombie:WorldSpaceCenter())
+                        dmgInfo:SetDamageForce(offset:GetNormalized() * force)
+                        zombie:TakeDamageInfo(dmgInfo)
+                    end
 
-    HZ.ArcBusy = false
+                    if IsValid(zombie) and not zombie.hz_dead then zombie:HZ_ExternalPush(offset, true) end
+                end
+            end
+        end)
+
+        HZ.ArcBusy = false
+        if not ok then ErrorNoHalt("[hordez] melee arc error: " .. tostring(err) .. "\n") end
+    end)
+
     if HZ.CV.debug:GetBool() then
         print(("[hordez] melee arc from %s: %d more infected"):format(tostring(attacker), #hit))
     end
@@ -764,6 +775,8 @@ local function BodygroupPlan(ent)
     return plan
 end
 
+HZ.WarmBodygroups = BodygroupPlan
+
 function HZ.RandomBodygroups(ent)
     local chance = HZ.CV.accessory:GetFloat()
     local plan = BodygroupPlan(ent)
@@ -781,41 +794,55 @@ end
 
 local FIT_MINS, FIT_MAXS = Vector(-13, -13, 0), Vector(13, 13, 72)
 local notZombie = { "hz_zombie" }
+local spotTr = {}
+local floorStart, floorEnd = Vector(), Vector()
+local floorIn = { start = floorStart, endpos = floorEnd, mask = MASK_NPCSOLID, filter = notZombie, output = spotTr }
+local fitStart, fitEnd = Vector(), Vector()
+local fitIn = { start = fitStart, endpos = fitEnd, mins = FIT_MINS, maxs = FIT_MAXS, mask = MASK_NPCSOLID,
+    filter = notZombie, output = spotTr }
+local losStart, losEnd = Vector(), Vector()
+local losIn = { start = losStart, endpos = losEnd, mask = MASK_NPCSOLID_BRUSHONLY, output = spotTr }
+local SPOT_RADII = { 24, 40, 60, 84, 112 }
 
-local function FloorAt(pos)
-    local tr = util.TraceLine({ start = pos + Vector(0, 0, 24), endpos = pos - Vector(0, 0, 64), mask = MASK_NPCSOLID,
-        filter = notZombie })
+local function FloorAt(px, py, pz)
+    floorStart:SetUnpacked(px, py, pz + 24)
+    floorEnd:SetUnpacked(px, py, pz - 64)
+    util.TraceLine(floorIn)
 
-    if tr.Hit and not tr.StartSolid and tr.HitNormal.z > 0.6 then return tr.HitPos + Vector(0, 0, 1) end
+    if spotTr.Hit and not spotTr.StartSolid and spotTr.HitNormal.z > 0.6 then
+        local hp = spotTr.HitPos
+        return hp.x, hp.y, hp.z + 1
+    end
 end
 
-local function BodyFits(pos)
-    local tr = util.TraceHull({ start = pos + Vector(0, 0, 2), endpos = pos + Vector(0, 0, 3), mins = FIT_MINS,
-        maxs = FIT_MAXS,
-        mask = MASK_NPCSOLID, filter = notZombie })
+local function BodyFits(px, py, pz)
+    fitStart:SetUnpacked(px, py, pz + 2)
+    fitEnd:SetUnpacked(px, py, pz + 3)
+    util.TraceHull(fitIn)
 
-    return not tr.Hit and not tr.StartSolid
+    return not spotTr.Hit and not spotTr.StartSolid
 end
 
 function HZ.FreeSpot(pos)
-    local base = FloorAt(pos) or pos
-    if BodyFits(base) then return base end
+    local bx, by, bz = FloorAt(pos.x, pos.y, pos.z)
+    if not bx then bx, by, bz = pos.x, pos.y, pos.z end
+    if BodyFits(bx, by, bz) then return Vector(bx, by, bz) end
 
-    for _, radius in ipairs({ 24, 40, 60, 84, 112 }) do
-        local off = math.Rand(0, 360)
+    for _, radius in ipairs(SPOT_RADII) do
+        local off = math.Rand(0, math.pi * 2)
         for step = 0, 7 do
-            local spot = base + Angle(0, off + step * 45, 0):Forward() * radius
-            local floor = FloorAt(spot)
-            if floor and math.abs(floor.z - base.z) < 40 and BodyFits(floor) then
-                local los = util.TraceLine({ start = base + Vector(0, 0, 36), endpos = floor + Vector(0, 0, 36),
-                    mask = MASK_NPCSOLID_BRUSHONLY })
-
-                if not los.Hit then return floor end
+            local ang = off + step * (math.pi / 4)
+            local fx, fy, fz = FloorAt(bx + math.cos(ang) * radius, by + math.sin(ang) * radius, bz)
+            if fx and math.abs(fz - bz) < 40 and BodyFits(fx, fy, fz) then
+                losStart:SetUnpacked(bx, by, bz + 36)
+                losEnd:SetUnpacked(fx, fy, fz + 36)
+                util.TraceLine(losIn)
+                if not spotTr.Hit then return Vector(fx, fy, fz) end
             end
         end
     end
 
-    return base
+    return Vector(bx, by, bz)
 end
 
 function HZ.SpawnZombie(pos, yaw, opts)
@@ -1175,17 +1202,37 @@ concommand.Add("hz_alert_all", function(ply)
     end
 end)
 
+local spawnSeq = 0
 concommand.Add("hz_spawn", function(ply, _, args)
     if not IsValid(ply) or not ply:IsAdmin() then return end
 
-    local tr = ply:GetEyeTrace()
-    for _ = 1, math.Clamp(tonumber(args[2]) or 1, 1, 30) do
-        HZ.SpawnZombie(tr.HitPos + Vector(math.Rand(-60, 60), math.Rand(-60, 60), 8), nil, { idle = args[1]
-            or "random" })
+    local hitPos = ply:GetEyeTrace().HitPos
+    local want = math.Clamp(tonumber(args[2]) or 1, 1, 30)
+    local idle = args[1] or "random"
+    local done = 0
+    spawnSeq = spawnSeq + 1
+    local timerId = "hordez_cmd_spawn_" .. spawnSeq
+
+    local function Step()
+        for _ = 1, 2 do
+            if done >= want then
+                timer.Remove(timerId)
+                return
+            end
+
+            HZ.SpawnZombie(hitPos + Vector(math.Rand(-60, 60), math.Rand(-60, 60), 8), nil, { idle = idle })
+            done = done + 1
+        end
+
+        if done >= want then timer.Remove(timerId) end
     end
+
+    Step()
+    if done < want then timer.Create(timerId, 0.03, 0, Step) end
 end)
 
 local STRESS_BATCH = 20
+local STRESS_REAL_BATCH = 2
 concommand.Add("hz_stress", function(ply, _, args)
     if not IsValid(ply) or not ply:IsAdmin() then return end
 
@@ -1228,6 +1275,7 @@ concommand.Add("hz_stress", function(ply, _, args)
         or "idle", radius))
 
     timer.Create("hordez_stress_spawn", 0, 0, function()
+        local realThisTick = 0
         for _ = 1, STRESS_BATCH do
             if done >= want then break end
 
@@ -1255,6 +1303,8 @@ concommand.Add("hz_stress", function(ply, _, args)
                 end
 
                 done = done + 1
+                realThisTick = realThisTick + 1
+                if realThisTick >= STRESS_REAL_BATCH then break end
             end
         end
 

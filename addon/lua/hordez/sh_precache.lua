@@ -93,11 +93,37 @@ local function WarmAnims()
     return true
 end
 
+local warmParticles = false
+
+local function WarmParticles()
+    if warmParticles then return end
+    warmParticles = true
+
+    warmTarget = warmTarget or GetRenderTarget("hordez_warm", 64, 64)
+    render.PushRenderTarget(warmTarget)
+    cam.Start2D()
+    for i = 1, 5 do
+        surface.SetMaterial(Material("particles/flamelet" .. i))
+        surface.SetDrawColor(255, 255, 255, 255)
+        surface.DrawTexturedRect(0, 0, 16, 16)
+    end
+
+    for i = 1, 9 do
+        surface.SetMaterial(Material("particle/smokesprites_000" .. i))
+        surface.SetDrawColor(255, 255, 255, 255)
+        surface.DrawTexturedRect(0, 0, 16, 16)
+    end
+
+    cam.End2D()
+    render.PopRenderTarget()
+end
+
 local function WarmNext()
     local model = table.remove(warmQueue, 1)
     if not model then
         if WarmAnims() then return end
 
+        WarmParticles()
         hook.Remove("PostRender", "hordez_warm")
         if HZ.BakeImpostors then HZ.BakeImpostors() end
 
@@ -111,21 +137,97 @@ local function WarmNext()
         warmTarget = warmTarget or GetRenderTarget("hordez_warm", 64, 64)
         render.PushRenderTarget(warmTarget)
         cam.Start3D(Vector(-120, 0, 40), angle_zero, 60, 0, 0, 64, 64)
-        for lod = 0, 3 do
+        local skins = math.max(ent:SkinCount() or 1, 1)
+        for skin = 0, skins - 1 do
+            ent:SetSkin(skin)
+            ent:SetLOD(0)
+            ent:SetupBones()
+            ent:DrawModel()
+        end
+
+        ent:SetSkin(0)
+        for bg = 0, ent:GetNumBodyGroups() - 1 do
+            local bgCount = ent:GetBodygroupCount(bg)
+            if bgCount > 1 then
+                for val = 1, bgCount - 1 do
+                    ent:SetBodygroup(bg, val)
+                    ent:DrawModel()
+                end
+
+                ent:SetBodygroup(bg, 0)
+            end
+        end
+
+        for lod = 1, 3 do
             ent:SetLOD(lod)
             ent:SetupBones()
             ent:DrawModel()
         end
 
+        ent:SetLOD(-1)
         cam.End3D()
         render.PopRenderTarget()
-        ent:Remove()
+        if HZ.SeedDeathModelPool then
+            HZ.SeedDeathModelPool(model, ent)
+        else
+            ent:Remove()
+        end
     end
 
     local ragdoll = ClientsideRagdoll(model)
     if IsValid(ragdoll) then
-        ragdoll:SetNoDraw(true)
-        ragdoll:Remove()
+        if HZ.SeedRagdollPool then
+            HZ.SeedRagdollPool(model, ragdoll)
+        else
+            ragdoll:SetNoDraw(true)
+            ragdoll:Remove()
+        end
+    end
+end
+
+local svWarmQueue = {}
+local svWarmEnt
+local svWarmedAnims = {}
+
+local function ServerWarmNext()
+    local model = table.remove(svWarmQueue, 1)
+    if not model then
+        if IsValid(svWarmEnt) then svWarmEnt:Remove() end
+        svWarmEnt = nil
+        hook.Remove("Think", "hordez_sv_warm")
+        return
+    end
+
+    if not IsValid(svWarmEnt) then
+        svWarmEnt = ents.Create("prop_dynamic")
+        if not IsValid(svWarmEnt) then
+            hook.Remove("Think", "hordez_sv_warm")
+            return
+        end
+
+        svWarmEnt:SetPos(vector_origin)
+        svWarmEnt:SetNoDraw(true)
+        svWarmEnt:SetSolid(SOLID_NONE)
+        svWarmEnt:SetMoveType(MOVETYPE_NONE)
+    end
+
+    svWarmEnt:SetModel(model)
+    local pools = HZ.ResolvePools(svWarmEnt)
+    HZ.ResolveShamblerPools(svWarmEnt)
+    if HZ.WarmBodygroups then HZ.WarmBodygroups(svWarmEnt) end
+
+    local sex = model:find("female", 1, true) and "f" or "m"
+    if not svWarmedAnims[sex] then
+        svWarmedAnims[sex] = true
+        for key, list in pairs(pools) do
+            if key ~= "climb" and key ~= "loops" and istable(list) then
+                for i = 1, #list do
+                    local seq = list[i]
+                    svWarmEnt:GetSequenceInfo(seq)
+                    svWarmEnt:GetSequenceGroundSpeed(seq)
+                end
+            end
+        end
     end
 end
 
@@ -141,6 +243,12 @@ function HZ.Precache()
         end
 
         hook.Add("PostRender", "hordez_warm", WarmNext)
+    else
+        for i = 1, #models do
+            if models[i]:find("/citizens/", 1, true) then svWarmQueue[#svWarmQueue + 1] = models[i] end
+        end
+
+        hook.Add("Think", "hordez_sv_warm", ServerWarmNext)
     end
 
     for i = 1, #sounds do util.PrecacheSound(sounds[i]) end

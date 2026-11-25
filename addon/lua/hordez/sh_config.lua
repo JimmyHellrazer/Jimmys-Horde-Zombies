@@ -1,5 +1,5 @@
 HZ = HZ or {}
-HZ.Version = "0.21.0"
+HZ.Version = "0.21.2"
 
 local FLAGS = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
 

@@ -1239,7 +1239,7 @@ concommand.Add("hz_stress", function(ply, _, args)
     if not IsValid(ply) or not ply:IsAdmin() then return end
 
     timer.Remove("hordez_stress_spawn")
-    local want = math.Clamp(math.floor(tonumber(args[1]) or 1000), 0, 4000)
+    local want = math.max(0, math.floor(tonumber(args[1]) or 1000))
     if want == 0 then
         print("[hordez] stress spawn stopped")
         return

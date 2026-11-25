@@ -14,7 +14,7 @@ local cvDebug = CreateClientConVar("hz_impostor_debug", "0", false, false,
 local DU, DV = 1 / 32, 1 / 16
 local NEAR_DIST = 1200
 local HALF_W, Z_LO, Z_HI = 24, -8, 88
-local MAX_QUADS = 6000
+local MAX_QUADS = 65000
 local REBUILD = 0.25
 
 local V_RUN_M, V_RUN_F, V_SHAMBLE, V_IDLE_M, V_IDLE_F = { 0, 1, 2 }, { 3, 4 }, 5, 6, 7

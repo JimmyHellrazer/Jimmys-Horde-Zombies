@@ -1048,7 +1048,7 @@ local BARRICADE_CLASSES = {
 }
 
 function HZ.IsBarricade(ent)
-    return HZ.CV.barricade:GetBool() and BARRICADE_CLASSES[ent:GetClass()] == true
+    return HZ.CV.barricade:GetBool() and BARRICADE_CLASSES[ent:GetClass()] == true and not ent:CreatedByMap()
 end
 
 local function PropHealth(ent, phys)
@@ -1247,3 +1247,16 @@ concommand.Add("hz_status", function(ply)
         HZ.CV.max:GetInt(), HZ.Flow.ready and "ready" or "not ready", HZ.Flow.graph and #HZ.Flow.graph.ids
         or 0, HZ.Stress))
 end)
+
+local function FogDensity()
+    local density
+    for _, fog in ipairs(ents.FindByClass("env_fog_controller")) do
+        local value = tonumber(fog:GetKeyValues().fogmaxdensity) or tonumber(fog:GetInternalVariable("fogmaxdensity"))
+        if value and value > 0 and (not density or value > density) then density = value end
+    end
+
+    SetGlobalFloat("hz_fog_density", density or 1)
+end
+
+hook.Add("InitPostEntity", "hordez_fog_density", FogDensity)
+timer.Create("hordez_fog_density", 10, 0, FogDensity)

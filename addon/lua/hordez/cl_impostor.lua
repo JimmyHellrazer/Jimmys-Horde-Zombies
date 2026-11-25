@@ -382,10 +382,12 @@ end
 local carrier
 
 local function ShaderClock(since, clock)
-    local fog = 0
+    local fog, fogEnd, fogRange = 0, 1, 1
     local mode = render.GetFogMode()
-    if cvFog:GetBool() and mode ~= MATERIAL_FOG_NONE and mode ~= MATERIAL_FOG_LINEAR_BELOW_FOG_Z then
-        fog = 1
+    local fogStart, fogStop = render.GetFogDistances()
+    if cvFog:GetBool() and mode ~= MATERIAL_FOG_NONE and mode ~= MATERIAL_FOG_LINEAR_BELOW_FOG_Z and fogStart
+        and fogStop and fogStop > fogStart then
+        fog, fogEnd, fogRange = 1, fogStop, fogStop - fogStart
         local r, g, b = render.GetFogColor()
         for _, layer in ipairs(LAYERS) do
             layer.mat:SetFloat("$c0_x", (r / 255) ^ 2.2)
@@ -404,6 +406,7 @@ local function ShaderClock(since, clock)
 
     render.SuppressEngineLighting(true)
     render.SetModelLighting(0, since, clock, fog)
+    render.SetModelLighting(1, fogEnd, fogRange, math.Clamp(GetGlobalFloat("hz_fog_density", 1), 0, 1))
     carrier:DrawModel()
     render.SuppressEngineLighting(false)
 end

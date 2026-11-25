@@ -1244,7 +1244,7 @@ function ENT:HZ_Brain(now)
     local think = (playerDist < CV.hot_dist:GetFloat() and math.Rand(0.12, 0.18) or math.Rand(0.35, 0.5))
         * (self.hz_shambler and 2 or 1)
 
-    if playerDist > 350 then
+    if playerDist > 500 and not (self.hz_tight and playerDist < CV.hot_dist:GetFloat()) then
         local load = HZ.Count / math.max(CV.think_full:GetFloat(), 1)
         if load > 1 then think = think * math.min(load, 4) end
     end
@@ -1257,7 +1257,9 @@ function ENT:HZ_Brain(now)
 
     local area = HZ.Flow.AreaOf(self)
     local nextId, flowDist, flowTarget
+    local graph = HZ.Flow.graph
     if area then nextId, flowDist, flowTarget = HZ.Flow.Step(area:GetID()) end
+    self.hz_tight = (area and graph and graph.tight[area:GetID()]) or self.hz_stuckSince ~= nil
     self.hz_flowDist = flowDist
     local best = self.hz_bestFlow
     if not self.hz_progressAt or (flowDist and (flowDist < 300 or not best or flowDist < best - 48

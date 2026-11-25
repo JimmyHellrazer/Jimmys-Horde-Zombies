@@ -27,6 +27,8 @@ local function Resume(co)
     return coroutine.resume(co)
 end
 
+local TIGHT_SIDE, NARROW_SIDE = 110, 60
+
 local function BuildGraph()
     if not navmesh.IsLoaded() then navmesh.Load() end
     local all = navmesh.GetAllNavAreas()
@@ -36,7 +38,8 @@ local function BuildGraph()
     end
 
     local started = SysTime()
-    local graph = { area = {}, center = {}, inc = {}, cost = {}, ids = {} }
+    local graph = { area = {}, center = {}, inc = {}, cost = {}, ids = {}, tight = {} }
+    local narrow = {}
     local signature = #all
     for i, area in ipairs(all) do
         local id = area:GetID()
@@ -49,6 +52,9 @@ local function BuildGraph()
         graph.inc[id] = {}
         graph.cost[id] = {}
         graph.ids[#graph.ids + 1] = id
+        local side = math.min(area:GetSizeX(), area:GetSizeY())
+        if side <= TIGHT_SIDE then graph.tight[id] = true end
+        if side <= NARROW_SIDE then narrow[id] = true end
         if i % 64 == 0 then Breathe() end
     end
 
@@ -66,6 +72,8 @@ local function BuildGraph()
                 local index = #incoming + 1
                 incoming[index] = id
                 graph.cost[otherId][index] = cost
+                if narrow[id] then graph.tight[otherId] = true end
+                if narrow[otherId] then graph.tight[id] = true end
             end
         end
 
@@ -85,8 +93,8 @@ local function BuildGraph()
     end
 
     Flow.graph = graph
-    print(("[hordez] flow graph: %d nav areas, %d climb / vault links (%s), built in %.1f s"):format(#graph.ids, links,
-        source, SysTime() - started))
+    print(("[hordez] flow graph: %d nav areas (%d tight), %d climb / vault links (%s), built in %.1f s"):format(
+        #graph.ids, table.Count(graph.tight), links, source, SysTime() - started))
 end
 
 local CELL = 128

@@ -129,6 +129,7 @@ end
 
 function ENT:OnRemove()
     HZ.Unregister(self)
+    self:HZ_ReleaseSeatProp()
     local owner = self.hz_owner
     if not self.hz_dead and not self.hz_virtualized and IsValid(owner) and owner.HZ_OnZombieDied then
         owner:HZ_OnZombieDied(self)
@@ -794,6 +795,7 @@ function ENT:HZ_TakeSeat(seat, instant)
 
     self:HZ_SeatOffset(bone, seat.shift)
     self.hz_seat, self.hz_seatBone = seat, bone
+    self:HZ_HoldSeatProp(seat.ent)
     takenSeats[#takenSeats + 1] = { zombie = self, seat = seat }
     self.hz_seatUntil = CurTime() + math.Rand(25, 70)
     self.hz_idleType, self.hz_pose = "chair", "chair"
@@ -803,9 +805,44 @@ function ENT:HZ_TakeSeat(seat, instant)
     return true
 end
 
+function ENT:HZ_HoldSeatProp(prop)
+    if not IsValid(prop) or prop:GetMoveType() ~= MOVETYPE_VPHYSICS then return end
+
+    local phys = prop:GetPhysicsObject()
+    if not IsValid(phys) then return end
+
+    if (prop.hz_seatHolds or 0) == 0 and phys:IsMotionEnabled() then
+        phys:EnableMotion(false)
+        prop.hz_seatFroze = true
+    end
+
+    prop.hz_seatHolds = (prop.hz_seatHolds or 0) + 1
+    self.hz_seatProp = prop
+end
+
+function ENT:HZ_ReleaseSeatProp()
+    local prop = self.hz_seatProp
+    self.hz_seatProp = nil
+    if not IsValid(prop) then return end
+
+    prop.hz_seatHolds = (prop.hz_seatHolds or 1) - 1
+    if prop.hz_seatHolds > 0 then return end
+
+    prop.hz_seatHolds = nil
+    if not prop.hz_seatFroze then return end
+
+    prop.hz_seatFroze = nil
+    local phys = prop:GetPhysicsObject()
+    if IsValid(phys) then
+        phys:EnableMotion(true)
+        phys:Wake()
+    end
+end
+
 function ENT:HZ_LeaveSeat(alert)
     local seat, bone = self.hz_seat, self.hz_seatBone
     self.hz_seat, self.hz_seatBone, self.hz_seatUntil = nil, nil, nil
+    self:HZ_ReleaseSeatProp()
     if not seat or not bone then return end
 
     local up = HZ.Pick(alert and self.P.chair_wake or self.P.chair_up) or HZ.Pick(self.P.chair_up)
@@ -1338,11 +1375,13 @@ function ENT:HZ_Brain(now)
         end
 
         local lateral = self.hz_flankSlot * width * math.Clamp((targetDist - closeDist) / ramp, 0, 1)
-        if math.abs(lateral) > 4 then
-            local to = Vector(targetPos.x - pos.x, targetPos.y - pos.y, 0)
+        local to = Vector(goal.x - pos.x, goal.y - pos.y, 0)
+        if math.abs(lateral) > 4 and to:LengthSqr() > 1 then
             to:Normalize()
             local flankGoal = goal + Vector(-to.y, to.x, 0) * lateral
-            if not HullTrace(pos + UP20, flankGoal + UP20, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit then
+            if not HullTrace(pos + UP20, flankGoal + UP20, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit
+                and not HullTrace(flankGoal + UP20, targetPos + UP20, FLANK_MINS, FLANK_MAXS,
+                    MASK_NPCSOLID_BRUSHONLY).Hit then
                 goal = flankGoal
             end
         end

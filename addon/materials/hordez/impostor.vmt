@@ -1,0 +1,17 @@
+// Far-zombie impostors (lua/hordez/cl_impostor.lua). $basetexture is replaced with the atlas render target at
+// run time; $c0 is the fog colour. Shader sources: shaders/hz_impostor_*.hlsl
+screenspace_general
+{
+	$pixshader "hz_impostor_ps20b"
+	$vertexshader "hz_impostor_vs20"
+	$basetexture "vgui/white"
+	$cull 0
+	$depthtest 1
+	$vertexcolor 1
+	$tcsize0 2
+	$tcsize1 2
+	$tcsize2 2
+	$c0_x 0
+	$c0_y 0
+	$c0_z 0
+}

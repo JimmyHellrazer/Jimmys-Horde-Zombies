@@ -1,0 +1,7 @@
+# backups and build leftovers
+*.bak
+*.bak[0-9]
+*~
+compile.log
+__pycache__/
+*.pyc

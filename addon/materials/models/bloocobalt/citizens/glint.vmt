@@ -1,6 +1,5 @@
 "UnlitGeneric"
 {
-	// Original shader: AddTexture
 	"$basetexture" "models\bloocobalt\citizens\glint"
 	"$additive" 1
 	"$model" 1

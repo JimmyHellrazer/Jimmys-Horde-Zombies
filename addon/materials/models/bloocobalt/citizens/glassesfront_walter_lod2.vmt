@@ -1,10 +1,6 @@
 "VertexLitGeneric"
 {
-	// Original shader: VertexLitMaskedEnvMappedTexture
 	"$basetexture" "models\bloocobalt\citizens\glassesfront_walter"
-
-
-
 
 	"$halflambert" 1
 }

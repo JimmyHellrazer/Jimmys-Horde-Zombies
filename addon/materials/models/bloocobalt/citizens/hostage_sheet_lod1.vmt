@@ -5,13 +5,11 @@ VertexLitGeneric
 
 	"$phong" "1"
 	"$phongexponent" "50"
-	"$phongboost" "0.1"	
+	"$phongboost" "0.1"
 	"$phongfresnelranges"	"[.1 0.2 1]"
 	"$halflambert" "1"
 
-
-	"$rimlight" "1"										
-	"$rimlightexponent" "30"							
+	"$rimlight" "1"
+	"$rimlightexponent" "30"
 	"$rimlightboost" "0.1"
-
 }

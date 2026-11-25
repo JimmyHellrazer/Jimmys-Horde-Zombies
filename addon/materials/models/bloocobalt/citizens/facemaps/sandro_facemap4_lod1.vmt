@@ -4,8 +4,7 @@
                 "$bumpmap"     "models\bloocobalt\citizens\facemaps\sandro_facemap_n"
                 "$phong" "1"
 	"$phongexponent" "5"
-	"$phongboost" "3"	
+	"$phongboost" "3"
 	"$phongfresnelranges"	"[.1 0.2 1]"
 	"$halflambert" "1"
-
 }

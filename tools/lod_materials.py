@@ -12,6 +12,7 @@ for folder, _, files in os.walk(root):
         if not name.lower().endswith(".vmt") or SKIP.search(name):
             continue
         text = open(os.path.join(folder, name), encoding="latin1").read()
+        text = re.sub(r"[ \t]*//[^\n]*", "", text)
         if not re.match(r'\s*"?vertexlitgeneric"?', text, re.I):
             continue
         base = name[:-4]

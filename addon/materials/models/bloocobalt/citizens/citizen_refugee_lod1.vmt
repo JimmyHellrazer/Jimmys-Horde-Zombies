@@ -4,8 +4,7 @@
                 "$bumpmap" "models\bloocobalt\citizens\citizen_sheet_normal_refugee"
 	"$halflambert" 1
 
-
-	"$rimlight" "1"										
-	"$rimlightexponent" "80"							
+	"$rimlight" "1"
+	"$rimlightexponent" "80"
 	"$rimlightboost" "0.1"
 }

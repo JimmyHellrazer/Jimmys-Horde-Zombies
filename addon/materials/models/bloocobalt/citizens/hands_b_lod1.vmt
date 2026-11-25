@@ -3,14 +3,12 @@
 	"$basetexture" "models\bloocobalt\citizens\hands_b"
 	"$halflambert" 1
 
-
                 "$bumpmap" "models\bloocobalt\citizens\hands_nb"
 	"$halflambert" 1
 
-
                 "$phong" "1"
 	"$phongexponent" "5"
-	"$phongboost" "2"	
+	"$phongboost" "2"
 	"$phongfresnelranges"	"[.1 0.2 1]"
 	"$halflambert" "1"
 }

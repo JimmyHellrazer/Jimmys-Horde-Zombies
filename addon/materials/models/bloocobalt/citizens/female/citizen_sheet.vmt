@@ -1,6 +1,5 @@
 "VertexLitGeneric"
 {
-	// Original shader: VertexLitTexture
 	"$basetexture" "models\bloocobalt\citizens\female\citizen_sheet"
     	"$bumpmap" "models\bloocobalt\citizens\female\citizen_sheet_n"
 	"$halflambert" 1
@@ -12,7 +11,7 @@
  	"$phongfresnelranges" "[0.1 2.1 5.1]"
 	"$phongalbedotint" "1"
 
-	"$rimlight" "1"										
-	"$rimlightexponent" "80"							
+	"$rimlight" "1"
+	"$rimlightexponent" "80"
 	"$rimlightboost" "0.1"
 }

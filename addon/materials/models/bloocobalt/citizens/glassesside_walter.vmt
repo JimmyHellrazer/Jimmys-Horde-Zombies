@@ -1,6 +1,5 @@
 "VertexLitGeneric"
 {
-	// Original shader: VertexLitMaskedEnvMappedTexture
 	"$basetexture" "models\bloocobalt\citizens\glassesside_walter"
     "$bumpmap"     "models\bloocobalt\citizens\glass_n"
 	"$envmapmask"  "models\bloocobalt\citizens\glassessidemask_walter"

@@ -185,6 +185,10 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
     end
 end)
 
+function HZ.BakeImpostors()
+    if not ready and not bakeAt and cvOn:GetBool() then StartBake() end
+end
+
 hook.Add("OnScreenSizeChanged", "hordez_impostors", function()
     if ready or bakeAt then StartBake() end
 end)

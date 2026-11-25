@@ -186,15 +186,15 @@ function HZ.NearestZombies(eye, maxDistSqr, limit, out, outDist, alertedOnly)
                 local distSqr = ent:GetPos():DistToSqr(eye)
                 if distSqr < maxDistSqr and (span < limit or distSqr < outDist[span])
                     and (not alertedOnly or ent:GetNW2Bool("hz_alerted")) then
-                        if span < limit then span = span + 1 end
-                        local j = span
-                        while j > 1 and outDist[j - 1] > distSqr do
-                            out[j], outDist[j] = out[j - 1], outDist[j - 1]
-                            j = j - 1
-                        end
-
-                        out[j], outDist[j] = ent, distSqr
+                    if span < limit then span = span + 1 end
+                    local j = span
+                    while j > 1 and outDist[j - 1] > distSqr do
+                        out[j], outDist[j] = out[j - 1], outDist[j - 1]
+                        j = j - 1
                     end
+
+                    out[j], outDist[j] = ent, distSqr
+                end
             end
         end
     end

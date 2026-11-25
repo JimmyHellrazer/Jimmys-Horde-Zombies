@@ -207,12 +207,12 @@ timer.Create("hordez_npc_engage", 1, 0, function()
                         local distSqr = zombie:GetPos():DistToSqr(eye)
                         if distSqr < ENGAGE_R * ENGAGE_R and (not bestDist or distSqr < bestDist)
                             and ent:Disposition(zombie) == D_HT then
-                                local tr = util.TraceLine({ start = eye, endpos = zombie:WorldSpaceCenter(),
-                                    mask = MASK_BLOCKLOS,
-                                    filter = { ent, zombie } })
+                            local tr = util.TraceLine({ start = eye, endpos = zombie:WorldSpaceCenter(),
+                                mask = MASK_BLOCKLOS,
+                                filter = { ent, zombie } })
 
-                                if not tr.Hit then best, bestDist = zombie, distSqr end
-                            end
+                            if not tr.Hit then best, bestDist = zombie, distSqr end
+                        end
                     end
                 end
 
@@ -480,8 +480,8 @@ function HZ.MeleeAttacker(victim, dmg)
     local inflictor = dmg:GetInflictor()
     if dmgType == DMG_GENERIC and IsValid(inflictor) and inflictor:IsWeapon()
         and dmg:GetDamageForce():LengthSqr() > 1 then
-            return attacker
-        end
+        return attacker
+    end
 end
 
 function HZ.ShoverOf(zombie)
@@ -498,8 +498,8 @@ function HZ.ShoverOf(zombie)
                 if offset:LengthSqr() > 1 and aim:LengthSqr() > 0.01
                     and offset:GetNormalized():Dot(aim:GetNormalized()) > 0.4
                     and (not bestDist or distSqr < bestDist) then
-                        best, bestDist = ply, distSqr
-                    end
+                    best, bestDist = ply, distSqr
+                end
             end
         end
     end
@@ -894,12 +894,12 @@ function HZ.FindSpawnArea(minD, maxDistSqr, tries, ahead)
         local area = graph.area[id]
         if dist and dist >= minD and dist <= maxDistSqr and IsValid(area) and not area:IsUnderwater()
             and area:GetSizeX() >= 24 and area:GetSizeY() >= 24 then
-                local pos = area:GetRandomPoint()
-                if not HZ.SeenByPlayers(pos, minD * 0.6) then
-                    found[#found + 1] = { area, pos }
-                    if #found >= want then break end
-                end
+            local pos = area:GetRandomPoint()
+            if not HZ.SeenByPlayers(pos, minD * 0.6) then
+                found[#found + 1] = { area, pos }
+                if #found >= want then break end
             end
+        end
     end
 
     if #found == 0 then return nil end
@@ -1023,6 +1023,68 @@ function HZ.BashDoor(door, zombie, dir, mat)
 
     sound.Play(HZ.Pick(kind.brk), pos, 85, math.random(90, 105))
     util.ScreenShake(pos, 4, 12, 0.6, 500)
+
+    return true
+end
+
+local BARRICADE_CLASSES = {
+    prop_physics = true,
+    prop_physics_multiplayer = true,
+    prop_physics_override = true,
+    func_physbox = true,
+    func_physbox_multiplayer = true,
+}
+
+function HZ.IsBarricade(ent)
+    return HZ.CV.barricade:GetBool() and BARRICADE_CLASSES[ent:GetClass()] == true
+end
+
+local function PropHealth(ent, phys)
+    local health = math.Clamp(IsValid(phys) and phys:GetMass() or 50, 20, 400)
+    local held = (IsValid(phys) and not phys:IsMotionEnabled()) or constraint.HasConstraints(ent)
+    if held then health = health * 2.5 end
+
+    return health * math.max(HZ.CV.barricade_hp:GetFloat(), 0.05)
+end
+
+function HZ.BashProp(ent, zombie, dir, mat, hitPos)
+    local kind = KindOf(mat)
+    local phys = ent:GetPhysicsObject()
+    local blow = HZ.CV.door_hit:GetFloat() * (zombie.hz_shambler and 0.6 or 1)
+    ent.hz_propHP = (ent.hz_propHP or PropHealth(ent, phys)) - blow
+    ent:EmitSound(HZ.Pick(kind.hit), 78, math.random(90, 110))
+
+    local dmgInfo = DamageInfo()
+    dmgInfo:SetDamage(25)
+    dmgInfo:SetAttacker(zombie)
+    dmgInfo:SetInflictor(zombie)
+    dmgInfo:SetDamageType(DMG_CLUB)
+    dmgInfo:SetDamagePosition(hitPos)
+    ent:TakeDamageInfo(dmgInfo)
+    if not IsValid(ent) then return true end
+
+    if IsValid(phys) and phys:IsMotionEnabled() then
+        phys:ApplyForceOffset(dir * phys:GetMass() * 150, hitPos)
+    end
+
+    if ent.hz_propHP > 0 then return false end
+
+    ent.hz_propHP = nil
+    constraint.RemoveAll(ent)
+    if IsValid(phys) then
+        phys:EnableMotion(true)
+        phys:Wake()
+        phys:ApplyForceCenter((dir * 300 + Vector(0, 0, 80)) * phys:GetMass())
+    end
+
+    local group = ent:GetCollisionGroup()
+    ent:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+    timer.Simple(15, function()
+        if IsValid(ent) and ent:GetCollisionGroup() == COLLISION_GROUP_DEBRIS then ent:SetCollisionGroup(group) end
+    end)
+
+    sound.Play(HZ.Pick(kind.brk), ent:WorldSpaceCenter(), 85, math.random(90, 105))
+    util.ScreenShake(ent:WorldSpaceCenter(), 3, 10, 0.5, 400)
 
     return true
 end

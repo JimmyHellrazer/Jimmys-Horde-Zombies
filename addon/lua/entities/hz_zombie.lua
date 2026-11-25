@@ -62,7 +62,7 @@ local FLANK_MINS, FLANK_MAXS = Vector(-10, -10, 0), Vector(10, 10, 40)
 local AHEAD_MINS, AHEAD_MAXS = Vector(-10, -10, 0), Vector(10, 10, 8)
 
 local IDLE_WEIGHTS = { { "stand", 30 }, { "wander", 30 }, { "sit", 10 }, { "lie", 10 }, { "lean", 10 },
-    { "crouch", 10 } }
+    { "crouch", 10 }, { "chair", 10 } }
 
 local function RandomIdle()
     local total = 0
@@ -297,21 +297,21 @@ function ENT:HZ_WatchPush(vel)
     local ownMove = self.hz_ownMove and engine.TickCount() - self.hz_ownMove < 4
     if lastPos and not ownMove and not self.hz_climbing and not self.hz_dead
         and (pos.z - lastPos.z > 40 or vz > 350) then
-            if HZ.CV.debug:GetBool() then
-                print(("[hordez] launch caught on %s: rose %.0f u, vz %.0f | pose %s, seq %s, inOnce %s, shove %s, alerted %s, onGround %s"):format(
-                    tostring(self), pos.z - lastPos.z, vz, tostring(self.hz_pose),
-                    self:GetSequenceName(self:GetSequence()),
-                    tostring(self.hz_inOnce), tostring(self.hz_inShove), tostring(self.hz_alerted),
-                    tostring(self.loco:IsOnGround())))
-            end
-
-            self:SetPos(lastPos)
-            self.loco:SetVelocity(vector_origin)
-            self.loco:ClearStuck()
-            self.hz_ownMove = engine.TickCount()
-            self.hz_wpT = now
-            return
+        if HZ.CV.debug:GetBool() then
+            print(("[hordez] launch caught on %s: rose %.0f u, vz %.0f | pose %s, seq %s, inOnce %s, shove %s, alerted %s, onGround %s"):format(
+                tostring(self), pos.z - lastPos.z, vz, tostring(self.hz_pose),
+                self:GetSequenceName(self:GetSequence()),
+                tostring(self.hz_inOnce), tostring(self.hz_inShove), tostring(self.hz_alerted),
+                tostring(self.loco:IsOnGround())))
         end
+
+        self:SetPos(lastPos)
+        self.loco:SetVelocity(vector_origin)
+        self.loco:ClearStuck()
+        self.hz_ownMove = engine.TickCount()
+        self.hz_wpT = now
+        return
+    end
 
     self.hz_wpPos, self.hz_wpVel, self.hz_wpT = pos, vel, now
     if not lastPos or ownMove or self.hz_inOnce or self.hz_climbing or self.hz_shove or self.hz_dead then return end
@@ -492,8 +492,8 @@ function ENT:HZ_FindLeanSpot()
         local tr = util.TraceLine({ start = eye, endpos = eye + dir * 56, mask = MASK_SOLID_BRUSHONLY })
         if tr.Hit and not tr.StartSolid and math.abs(tr.HitNormal.z) < 0.3
             and (not best or tr.Fraction < best.Fraction) then
-                best = tr
-            end
+            best = tr
+        end
     end
 
     if not best then return false end
@@ -685,6 +685,149 @@ function ENT:HZ_AlertTurn(pos)
     return true
 end
 
+local SEAT_REACH, SEAT_LOW, SEAT_HIGH = 36, 14, 22
+local takenSeats = {}
+
+local function SeatTaken(pos)
+    for i = #takenSeats, 1, -1 do
+        local taken = takenSeats[i]
+        if not IsValid(taken.zombie) or taken.zombie.hz_seat ~= taken.seat then
+            table.remove(takenSeats, i)
+        elseif taken.seat.pos:DistToSqr(pos) < 26 * 26 then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function SeatBlocked(ent)
+    if not IsValid(ent) then return false end
+    if ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() or ent:GetClass():find("door", 1, true) then return true end
+
+    local phys = ent:GetPhysicsObject()
+
+    return IsValid(phys) and phys:IsMotionEnabled() and not phys:IsAsleep()
+end
+
+function ENT:HZ_FindSeat()
+    if not CV.sit:GetBool() or #self.P.chair == 0 or #self.P.chair_down == 0 then return nil end
+
+    local base = self:GetPos()
+    local yaw = self:GetAngles().y
+    local low, high = base + Vector(0, 0, 12), base + Vector(0, 0, SEAT_HIGH + 4)
+    for i = 0, 7 do
+        local dir = Angle(0, yaw + i * 45, 0):Forward()
+        local front = util.TraceLine({ start = low, endpos = low + dir * SEAT_REACH, mask = MASK_NPCSOLID,
+            filter = NO_ZOMBIES })
+
+        if front.Hit and not front.StartSolid and math.abs(front.HitNormal.z) < 0.3
+            and not SeatBlocked(front.Entity) then
+            local dist = front.Fraction * SEAT_REACH
+            local over = util.TraceLine({ start = high, endpos = high + dir * (dist + 24), mask = MASK_NPCSOLID,
+                filter = NO_ZOMBIES })
+
+            local spot = front.HitPos + dir * 9
+            local top = util.TraceLine({ start = Vector(spot.x, spot.y, high.z),
+                endpos = Vector(spot.x, spot.y, base.z + 6),
+                mask = MASK_NPCSOLID, filter = NO_ZOMBIES })
+
+            local height = top.HitPos.z - base.z
+            if dist >= 13 and not over.Hit and top.Hit and not top.StartSolid and top.HitNormal.z > 0.8
+                and height >= SEAT_LOW and height <= SEAT_HIGH then
+                local body = util.TraceHull({ start = top.HitPos + Vector(0, 0, 2),
+                    endpos = top.HitPos + Vector(0, 0, 3),
+                    mins = Vector(-8, -8, 0), maxs = Vector(8, 8, 34), mask = MASK_NPCSOLID, filter = NO_ZOMBIES })
+
+                if not body.Hit and not body.StartSolid and not SeatTaken(top.HitPos) then
+                    local toward = Vector(-front.HitNormal.x, -front.HitNormal.y, 0)
+                    toward:Normalize()
+                    local ent = front.Entity
+
+                    return { dir = toward, shift = toward * (dist + 9), pos = top.HitPos,
+                        ent = IsValid(ent) and ent or nil, entPos = IsValid(ent) and ent:GetPos() or nil }
+                end
+            end
+        end
+    end
+end
+
+function ENT:HZ_SeatOffset(bone, world)
+    self:ManipulateBonePosition(bone, Vector(world:Dot(self:GetForward()), -world:Dot(self:GetRight()), 0))
+end
+
+function ENT:HZ_TakeSeat(seat, instant)
+    local bone = self:LookupBone("ValveBiped.Bip01_Pelvis")
+    local down = HZ.Pick(self.P.chair_down)
+    if not seat or not bone or not down then return false end
+
+    local function Interrupted()
+        return self.hz_alerted or self.hz_wakeAt or self.hz_inShove or self.hz_dead
+    end
+
+    if instant then
+        self:SetAngles(Angle(0, (-seat.dir):Angle().y, 0))
+    else
+        self:HZ_IdleTurn(self:GetPos() + seat.dir * 100)
+        if Interrupted() then return false end
+
+        self:SetAngles(Angle(0, seat.dir:Angle().y, 0))
+        local start = CurTime()
+        local dur = math.max(self:SequenceDuration(down), 0.1)
+        local played = self:HZ_RootPlay(down, { free = true, xyscale = 0, abort = function()
+            local frac = math.Clamp((CurTime() - start) / dur, 0, 1)
+            self:HZ_SeatOffset(bone, seat.shift * (frac * frac * (3 - 2 * frac)))
+
+            return Interrupted()
+        end })
+
+        if played < 0.9 then
+            self:ManipulateBonePosition(bone, vector_origin)
+            if not Interrupted() then self:HZ_SetSeq(HZ.Pick(self.P.stand)) end
+
+            return false
+        end
+    end
+
+    self:HZ_SeatOffset(bone, seat.shift)
+    self.hz_seat, self.hz_seatBone = seat, bone
+    takenSeats[#takenSeats + 1] = { zombie = self, seat = seat }
+    self.hz_seatUntil = CurTime() + math.Rand(25, 70)
+    self.hz_idleType, self.hz_pose = "chair", "chair"
+    self:HZ_SetSeq(HZ.Pick(self.P.chair))
+    if instant then self:SetCycle(math.random()) end
+
+    return true
+end
+
+function ENT:HZ_LeaveSeat(alert)
+    local seat, bone = self.hz_seat, self.hz_seatBone
+    self.hz_seat, self.hz_seatBone, self.hz_seatUntil = nil, nil, nil
+    if not seat or not bone then return end
+
+    local up = HZ.Pick(alert and self.P.chair_wake or self.P.chair_up) or HZ.Pick(self.P.chair_up)
+    if up then
+        local start = CurTime()
+        local rate = alert and math.Rand(1.15, 1.4) or 1
+        local dur = math.max(self:SequenceDuration(up) / rate, 0.1)
+        self:HZ_RootPlay(up, { free = true, xyscale = 0, rate = rate, abort = function()
+            local frac = math.Clamp((CurTime() - start) / dur, 0, 1)
+            self:HZ_SeatOffset(bone, seat.shift * (1 - frac * frac * (3 - 2 * frac)))
+
+            return self.hz_dead or (not alert and (self.hz_alerted or self.hz_wakeAt))
+        end })
+    end
+
+    if not self.hz_dead then self:ManipulateBonePosition(bone, vector_origin) end
+end
+
+function ENT:HZ_SeatGone()
+    local seat = self.hz_seat
+    if not seat or not seat.entPos then return false end
+
+    return not IsValid(seat.ent) or seat.ent:GetPos():DistToSqr(seat.entPos) > 36
+end
+
 function ENT:HZ_EnterIdle()
     local now = CurTime()
     if self.hz_startAlerted then
@@ -697,14 +840,17 @@ function ENT:HZ_EnterIdle()
 
     local idleType = self.hz_idleType
     if idleType == "lean" and not self:HZ_FindLeanSpot() then idleType = "stand" end
+    if idleType == "chair" and not self:HZ_TakeSeat(self:HZ_FindSeat(), true) then idleType = "wander" end
+    self.hz_nextIdleSwap = now + math.Rand(6, 16)
+    self.hz_nextWander = now + math.Rand(1, 8)
+    self.hz_nextBrain = now + math.Rand(0, 1)
+    if idleType == "chair" then return end
+
     self.hz_pose = idleType
     local pool = self.P[idleType]
     if idleType == "wander" or not pool or #pool == 0 then pool = self.P.stand end
     self:HZ_SetSeq(HZ.Pick(pool))
     if idleType == "sit" or idleType == "lie" or idleType == "lean" then self:SetCycle(math.random()) end
-    self.hz_nextIdleSwap = now + math.Rand(6, 16)
-    self.hz_nextWander = now + math.Rand(1, 8)
-    self.hz_nextBrain = now + math.Rand(0, 1)
 end
 
 function ENT:HZ_StrollGoal(pos, maxLeg)
@@ -785,9 +931,29 @@ function ENT:HZ_IdleBrain(now)
     if self.hz_wakeAt then return end
 
     local pose = self.hz_pose
+    if pose == "chair" then
+        if self:HZ_SeatGone() or now > (self.hz_seatUntil or 0) then
+            self:HZ_LeaveSeat(false)
+            if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return end
+
+            self.hz_idleType, self.hz_pose = "wander", "wander"
+            self:HZ_SetSeq(HZ.Pick(self.P.stand))
+            self.hz_nextWander = now + math.Rand(2, 6)
+            self.hz_nextSeatLook = now + math.Rand(20, 40)
+        end
+
+        return
+    end
+
     if pose == "wander" and not self.hz_wanderGoal and self.hz_settleAt and now > self.hz_settleAt then
         self:HZ_TrySettle(now, pos)
         pose = self.hz_pose
+    end
+
+    if (pose == "wander" or pose == "stand") and not self.hz_wanderGoal and now > (self.hz_nextSeatLook or 0) then
+        self.hz_nextSeatLook = now + math.Rand(4, 10)
+        if playerDist < 3000 and self:HZ_TakeSeat(self:HZ_FindSeat(), false) then return end
+        if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return end
     end
 
     local strolls = (pose == "wander" or (pose == "stand" and math.random() < 0.08)) and not self.hz_wanderGoal
@@ -803,9 +969,9 @@ function ENT:HZ_IdleBrain(now)
         end
     elseif (pose == "stand" or pose == "wander" or pose == "crouch") and not self.hz_wanderGoal
         and (now > self.hz_nextIdleSwap or self:GetCycle() > 0.97) then
-            self:HZ_SetSeq(HZ.Pick(pose == "crouch" and self.P.crouch or self.P.stand))
-            self.hz_nextIdleSwap = now + math.Rand(6, 16)
-        end
+        self:HZ_SetSeq(HZ.Pick(pose == "crouch" and self.P.crouch or self.P.stand))
+        self.hz_nextIdleSwap = now + math.Rand(6, 16)
+    end
 
     if playerDist < 1400 and math.random() < 0.1 then HZ.Voice(self, "idle", 65) end
 end
@@ -813,9 +979,9 @@ end
 function ENT:HZ_Look(pos)
     local sight = CV.sight:GetFloat()
     local pose = self.hz_pose
-    if pose == "lie" or pose == "sit" then sight = sight * 0.7 end
+    if pose == "lie" or pose == "sit" or pose == "chair" then sight = sight * 0.7 end
     local forward = self:GetForward()
-    local eye = pos + Vector(0, 0, pose == "lie" and 16 or 60)
+    local eye = pos + Vector(0, 0, (pose == "lie" and 16) or (pose == "chair" and 44) or 60)
     for _, target in ipairs(HZ.GetTargets()) do
         local ent = target.ent
         if IsValid(ent) then
@@ -878,6 +1044,12 @@ function ENT:HZ_Wake()
     self.hz_pose = "stand"
     self.hz_wakeStartled = nil
     HZ.Voice(self, math.random() < 0.5 and "becomealert" or "alert", 80)
+    if pose == "chair" then
+        self:HZ_LeaveSeat(true)
+        self.hz_nextBrain = 0
+        return
+    end
+
     local upSeq = self.hz_upSeq
     self.hz_upSeq = nil
     if upSeq and (pose == "sit" or pose == "lie") then pool = { upSeq } end
@@ -906,6 +1078,14 @@ local SETTLE = { sit = { "sit_down", "Sitting03", "Sitting03_to_Standing" },
 
 function ENT:HZ_TrySettle(now, pos)
     local idleType = self.hz_settlePick or RandomIdle()
+    if idleType == "chair" then
+        self.hz_settleAt, self.hz_settlePick = nil, nil
+        if self:HZ_TakeSeat(self:HZ_FindSeat(), false) then return end
+        if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return end
+
+        idleType = "stand"
+    end
+
     local tr = SETTLE[idleType]
     local down = tr and HZ.Pick(self.P[tr[1]])
     if down and self:LookupSequence(tr[2]) >= 0 then
@@ -959,8 +1139,14 @@ function ENT:HZ_NearestTarget(pos)
 end
 
 function ENT:HZ_Clear(pos, target)
-    return not HullTrace(pos + UP20, target:GetPos() + UP20, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID_BRUSHONLY,
-        FilterPair(self, target)).Hit
+    local tr = HullTrace(pos + UP20, target:GetPos() + UP20, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID_BRUSHONLY,
+        FilterPair(self, target))
+
+    if not tr.Hit then return true end
+
+    local ent = tr.Entity
+
+    return IsValid(ent) and ent:GetClass() == "func_breakable_surf"
 end
 
 function ENT:HZ_Chase(now)
@@ -1035,8 +1221,8 @@ function ENT:HZ_Brain(now)
     local aggro = self.hz_aggro
     if aggro and now < (self.hz_aggroUntil or 0) and HZ.IsHostile(aggro)
         and aggro:GetPos():DistToSqr(pos) < 600 * 600 then
-            target = aggro
-        end
+        target = aggro
+    end
 
     if not target then
         self.hz_target, self.hz_goal = nil, nil
@@ -1045,9 +1231,9 @@ function ENT:HZ_Brain(now)
             local stop = HZ.Pick(self.P.run_stop)
             if stop and not self.hz_shambler and self.loco:IsOnGround()
                 and self.loco:GetVelocity():Length2D() > 150 then
-                    self:HZ_PlayOnce(stop, 1.1, true, 1, nil, true, true)
-                    if self.hz_dead or not self.hz_alerted then return end
-                end
+                self:HZ_PlayOnce(stop, 1.1, true, 1, nil, true, true)
+                if self.hz_dead or not self.hz_alerted then return end
+            end
 
             self:HZ_SetSeq(HZ.Pick(self.P.alert_idle))
         end
@@ -1397,8 +1583,8 @@ function ENT:HZ_HitDamage(target)
     for zombie in pairs(HZ.Zombies) do
         if zombie ~= self and IsValid(zombie) and not zombie.hz_dead and zombie.hz_target == target
             and zombie:GetPos():DistToSqr(targetPos) < 110 * 110 then
-                attackers = attackers + 1
-            end
+            attackers = attackers + 1
+        end
     end
 
     local full = math.max(2, CV.dmg_mob_n:GetInt())
@@ -1688,7 +1874,8 @@ function ENT:HZ_TryVault(toward)
     return true
 end
 
-function ENT:HZ_PoundDoor(door, at, dir, mat)
+function ENT:HZ_PoundDoor(door, at, dir, mat, bash)
+    bash = bash or HZ.BashDoor
     local seq = HZ.Pick(self.P.door)
     if seq then self:HZ_SetSeq(seq, self.hz_shambler and 0.8 or 1) end
     self.hz_moveAnim = nil
@@ -1701,7 +1888,7 @@ function ENT:HZ_PoundDoor(door, at, dir, mat)
         self.loco:FaceTowards(at)
         if not HZ.AIDisabled() and CurTime() >= nextBlow then
             nextBlow = CurTime() + every * math.Rand(0.85, 1.15)
-            if HZ.BashDoor(door, self, dir, mat) then break end
+            if bash(door, self, dir, mat, at) then break end
 
             if math.random() < 0.25 then HZ.Voice(self, "rageat", 78) end
         end
@@ -1724,6 +1911,22 @@ function ENT:HZ_TryObstacle()
     local class = ent:GetClass()
     if class:find("door", 1, true) then
         self:HZ_PoundDoor(ent, tr.HitPos, dir, tr.MatType)
+        return true
+    end
+
+    if class == "func_breakable_surf" then
+        self:HZ_PlayOnce(HZ.Pick(self.P.melee), 1.3, false, nil, tr.HitPos)
+        if IsValid(ent) then
+            ent:Fire("Shatter", "0.5 0.5 128")
+            ent:EmitSound("physics/glass/glass_sheet_break" .. math.random(1, 3) .. ".wav", 80, math.random(95, 105))
+        end
+
+        self.hz_nextBrain = 0
+        return true
+    end
+
+    if ent:GetMoveType() == MOVETYPE_VPHYSICS and HZ.IsBarricade(ent) then
+        self:HZ_PoundDoor(ent, tr.HitPos, dir, tr.MatType, HZ.BashProp)
         return true
     end
 
@@ -1759,7 +1962,7 @@ function ENT:HZ_Shoved()
     local dir = SHOVE_DIRS[self:HZ_LocalDir(push)]
     local pools = self.P
     local seq
-    if not self.hz_alerted and self.hz_pose == "lie" then
+    if not self.hz_alerted and (self.hz_pose == "lie" or self.hz_pose == "chair") then
         if not self.hz_wakeAt then self.hz_wakeAt = CurTime() end
         return
     end
@@ -1857,8 +2060,8 @@ function ENT:HZ_DeathKind(dmg)
         or dmg:IsDamageType(bit.bor(DMG_CRUSH, DMG_VEHICLE, DMG_FALL, DMG_BLAST, DMG_SONIC, DMG_DISSOLVE))
         or dmg:GetDamageForce():Length() > 60000 or self.hz_climbing or not self.loco:IsOnGround()
         or (self.hz_pose and self.hz_pose ~= "stand" and self.hz_pose ~= "wander") then
-            return HZ.DEATH_RAGDOLL
-        end
+        return HZ.DEATH_RAGDOLL
+    end
 
     if dmg:IsDamageType(DMG_BUCKSHOT) or (self.hz_pelletTick == tick and (self.hz_pellets or 0) >= 3) then
         return HZ.DEATH_SHOTGUN

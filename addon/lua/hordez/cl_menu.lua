@@ -17,7 +17,7 @@ local function ServerPanel(pos)
 
     AddHeader(pos, "Spawn at crosshair")
     local idle = pos:ComboBox("Idle pose")
-    for _, choice in ipairs({ "random", "stand", "wander", "sit", "lie", "lean", "crouch" }) do
+    for _, choice in ipairs({ "random", "stand", "wander", "sit", "lie", "lean", "crouch", "chair" }) do
         idle:AddChoice(choice, choice, choice == "random")
     end
 

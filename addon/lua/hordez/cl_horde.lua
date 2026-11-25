@@ -852,8 +852,8 @@ local function OnPellet(src, dir, dmg, pellets)
 
                         if dist < 81
                             and (not hitS or along < hitS) then
-                                hitS, hitD, hitCap, hitRag = along, nil, nil, rag
-                            end
+                            hitS, hitD, hitCap, hitRag = along, nil, nil, rag
+                        end
                     end
                 end
             end

@@ -100,53 +100,53 @@ function Flow.AddClimbLinks(graph, all)
                     local otherExtent = ext[neighbor]
                     if not area:IsConnected(neighbor) and otherExtent.lo.z - extent.hi.z <= 20
                         and extent.lo.z - otherExtent.hi.z <= 80 then
-                            local link = Flow.VaultLink(graph, area, neighbor)
-                            if link then
-                                local otherId = neighbor:GetID()
-                                local incoming = graph.inc[otherId]
-                                incoming[#incoming + 1] = id
-                                graph.cost[otherId][#incoming] = link.len + 60
-                                graph.climb[id] = graph.climb[id] or {}
-                                graph.climb[id][otherId] = link
-                                count = count + 1
-                            end
+                        local link = Flow.VaultLink(graph, area, neighbor)
+                        if link then
+                            local otherId = neighbor:GetID()
+                            local incoming = graph.inc[otherId]
+                            incoming[#incoming + 1] = id
+                            graph.cost[otherId][#incoming] = link.len + 60
+                            graph.climb[id] = graph.climb[id] or {}
+                            graph.climb[id][otherId] = link
+                            count = count + 1
                         end
+                    end
 
                     if otherExtent.hi.z - extent.lo.z >= CLIMB_MIN and otherExtent.lo.z - extent.hi.z <= CLIMB_MAX
                         and not area:IsConnected(neighbor) then
-                            local pointA = area:GetClosestPointOnArea(graph.center[neighbor:GetID()])
-                            local pointB = pointA and neighbor:GetClosestPointOnArea(pointA)
-                            if pointB then
-                                local dz = pointB.z - pointA.z
-                                local distSqr = Vector(pointB.x - pointA.x, pointB.y - pointA.y, 0)
-                                if dz >= CLIMB_MIN and dz <= CLIMB_MAX and distSqr:Length() <= GAP then
-                                    local dir = distSqr:Length() > 1 and distSqr:GetNormalized()
-                                        or Vector(graph.center[neighbor:GetID()].x - pointA.x,
-                                        graph.center[neighbor:GetID()].y - pointA.y, 0):GetNormalized()
+                        local pointA = area:GetClosestPointOnArea(graph.center[neighbor:GetID()])
+                        local pointB = pointA and neighbor:GetClosestPointOnArea(pointA)
+                        if pointB then
+                            local dz = pointB.z - pointA.z
+                            local distSqr = Vector(pointB.x - pointA.x, pointB.y - pointA.y, 0)
+                            if dz >= CLIMB_MIN and dz <= CLIMB_MAX and distSqr:Length() <= GAP then
+                                local dir = distSqr:Length() > 1 and distSqr:GetNormalized()
+                                    or Vector(graph.center[neighbor:GetID()].x - pointA.x,
+                                    graph.center[neighbor:GetID()].y - pointA.y, 0):GetNormalized()
 
-                                    local foot = pointA - dir * 14
-                                    local tr = util.TraceHull({ start = foot + Vector(0, 0, 8),
-                                        endpos = foot + Vector(0, 0, dz + 8),
-                                        mins = UP_MINS, maxs = UP_MAXS, mask = MASK_NPCSOLID_BRUSHONLY })
+                                local foot = pointA - dir * 14
+                                local tr = util.TraceHull({ start = foot + Vector(0, 0, 8),
+                                    endpos = foot + Vector(0, 0, dz + 8),
+                                    mins = UP_MINS, maxs = UP_MAXS, mask = MASK_NPCSOLID_BRUSHONLY })
 
-                                    local top = pointB + dir * 16
-                                    local over = not tr.Hit
-                                        and util.TraceHull({ start = Vector(foot.x, foot.y, pointB.z + 6),
-                                        endpos = top + Vector(0, 0, 6), mins = TOP_MINS, maxs = TOP_MAXS,
-                                        mask = MASK_NPCSOLID_BRUSHONLY })
+                                local top = pointB + dir * 16
+                                local over = not tr.Hit
+                                    and util.TraceHull({ start = Vector(foot.x, foot.y, pointB.z + 6),
+                                    endpos = top + Vector(0, 0, 6), mins = TOP_MINS, maxs = TOP_MAXS,
+                                    mask = MASK_NPCSOLID_BRUSHONLY })
 
-                                    if over and not over.Hit then
-                                        local otherId = neighbor:GetID()
-                                        local incoming = graph.inc[otherId]
-                                        incoming[#incoming + 1] = id
-                                        graph.cost[otherId][#incoming] = distSqr:Length() + dz * 2 + 80
-                                        graph.climb[id] = graph.climb[id] or {}
-                                        graph.climb[id][otherId] = { foot = foot, top = top }
-                                        count = count + 1
-                                    end
+                                if over and not over.Hit then
+                                    local otherId = neighbor:GetID()
+                                    local incoming = graph.inc[otherId]
+                                    incoming[#incoming + 1] = id
+                                    graph.cost[otherId][#incoming] = distSqr:Length() + dz * 2 + 80
+                                    graph.climb[id] = graph.climb[id] or {}
+                                    graph.climb[id][otherId] = { foot = foot, top = top }
+                                    count = count + 1
                                 end
                             end
                         end
+                    end
                 end
             end
         end)

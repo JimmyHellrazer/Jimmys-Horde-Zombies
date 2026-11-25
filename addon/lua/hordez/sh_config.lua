@@ -34,6 +34,10 @@ HZ.CV = {
     virt_near   = MakeConVar("hz_virtual_near", "2000",
         "A virtual zombie becomes a real one within this distance of a target"),
     virt_far    = MakeConVar("hz_virtual_far", "2800", "A real chasing zombie beyond this distance can turn virtual"),
+    sit         = MakeConVar("hz_sit", "1", "Idle zombies sit down on seat-height props and ledges"),
+    barricade   = MakeConVar("hz_barricade", "1", "Zombies beat on props in their way until they give"),
+    barricade_hp = MakeConVar("hz_barricade_health", "1",
+        "How much beating a prop takes (x its mass, frozen or welded props take 2.5x more)"),
     think_full  = MakeConVar("hz_think_full", "150",
         "Up to this many live zombies all think at the full rate; above it the ones not right next to a player think proportionally less often (at most 4x)"),
     target_npcs = MakeConVar("hz_target_npcs", "1", "Zombies also hunt NPCs / other NextBots (TIF soldiers etc.)"),
@@ -90,8 +94,8 @@ for _,
     name in ipairs({ "male_01", "male_02", "male_03", "male_04", "male_05", "male_06", "male_07", "male_08", "male_09",
     "male_10", "female_01", "female_01_b", "female_02", "female_02_b", "female_03", "female_03_b", "female_04",
     "female_04_b", "female_06", "female_06_b", "female_07", "female_07_b" }) do
-        HZ.Models[#HZ.Models + 1] = "models/hordez/citizens/" .. name .. ".mdl"
-    end
+    HZ.Models[#HZ.Models + 1] = "models/hordez/citizens/" .. name .. ".mdl"
+end
 
 HZ.FemaleChance = 0.35
 
@@ -153,6 +157,10 @@ HZ.SeqPools = {
         "Walk_Neutral_04b" },
     vault      = { "Climb36_Hurdle_04_InPlace" },
     run_stop   = { "Running_to_Standing", "Running_to_Standing_02" },
+    chair      = { "Sitting_in_Chair01" },
+    chair_down = { "Standing_to_Sitting_in_Chair" },
+    chair_up   = { "Sitting_in_Chair_to_Standing" },
+    chair_wake = { "Sitting_in_Chair_to_Standing_Alert" },
     sit_down   = { "Standing_to_Sitting03" },
     lie_down   = { "Standing_to_Lying03" },
     shove_sit_left  = { "Shoved_Sitting_Leftward" },

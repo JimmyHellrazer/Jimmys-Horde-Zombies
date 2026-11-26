@@ -51,6 +51,8 @@ end
 local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor", "hordez/impostor_far.png")
 local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near", "hordez/impostor_near.png")
 local LAYERS = { farLayer, nearLayer }
+local SHADER_OK = system.IsWindows() and (render.GetDXLevel() or 90) >= 90
+    and not farLayer.mat:IsError() and not nearLayer.mat:IsError()
 local atlasRT = nearLayer.rt
 local dbgMat = CreateMaterial("hz_impostor_dbg", "UnlitGeneric",
     { ["$basetexture"] = atlasRT:GetName(), ["$translucent"] = 1 })
@@ -78,7 +80,7 @@ local function SaveCache()
 end
 
 local function LoadCache()
-    if not file.Exists(CACHE_META, "DATA") then return false end
+    if not SHADER_OK or not file.Exists(CACHE_META, "DATA") then return false end
 
     local meta = util.JSONToTable(file.Read(CACHE_META, "DATA") or "")
     if not istable(meta) or meta.version ~= CACHE_VER or not istable(meta.rates) or #meta.rates < #VARIANTS then
@@ -150,6 +152,8 @@ local function StandIn(variant)
 end
 
 local function StartBake()
+    if not SHADER_OK then return end
+
     ready, fromCache, bakeAt = false, false, 1
     for _, model in ipairs(bakeModels or {}) do
         if IsValid(model) then model:Remove() end
@@ -239,8 +243,8 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
         bakeModels = {}
         for _, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", layer.rt) end
         dbgMat:SetTexture("$basetexture", nearLayer.rt)
-        pcall(SaveCache)
-        ready = true
+        local ok, saved = pcall(SaveCache)
+        if not (ok and saved and LoadCache()) then ready = true end
     end
 end)
 
@@ -504,6 +508,7 @@ local function Rebuild(now)
 end
 
 local carrier
+local carrierPos = Vector()
 local lastScrW, lastScrH, lastFogR, lastFogG, lastFogB
 
 local function ShaderClock(since, clock)
@@ -542,6 +547,9 @@ local function ShaderClock(since, clock)
         carrier:SetModelScale(0)
     end
 
+    local eye, aim = EyePos(), EyeVector()
+    carrierPos:SetUnpacked(eye.x + aim.x * 16, eye.y + aim.y * 16, eye.z + aim.z * 16)
+    carrier:SetPos(carrierPos)
     render.SuppressEngineLighting(true)
     render.SetModelLighting(0, since, clock, fog)
     render.SetModelLighting(1, fogEnd, fogRange, math.Clamp(GetGlobalFloat("hz_fog_density", 1), 0, 1))
@@ -553,7 +561,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     if depth or sky or sky3d then return end
 
     local now = CurTime()
-    if not ready and not bakeAt and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
+    if SHADER_OK and not ready and not bakeAt and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
         if not LoadCache() then StartBake() end
     end
 

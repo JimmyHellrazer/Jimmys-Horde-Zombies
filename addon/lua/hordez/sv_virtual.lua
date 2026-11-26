@@ -1044,10 +1044,26 @@ end
 
 local killingAsReal = false
 
-local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force)
+local function DeathNotice(attacker, inflictor)
+    local gamemode = gmod.GetGamemode()
+    if not gamemode or not gamemode.SendDeathNotice or not IsValid(attacker) then return end
+
+    local source = IsValid(inflictor) and inflictor or attacker
+    if source == attacker and attacker:IsPlayer() and IsValid(attacker:GetActiveWeapon()) then
+        source = attacker:GetActiveWeapon()
+    end
+
+    gamemode:SendDeathNotice(attacker, source:GetClass(), "#hz_zombie", 0)
+end
+
+local function HitAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force, lethal)
     local ent = PromoteRow(row, x, y, z)
     if not ent then
-        DropRow(row, true)
+        if lethal then
+            DropRow(row, true)
+            DeathNotice(attacker, inflictor)
+        end
+
         return
     end
 
@@ -1055,7 +1071,7 @@ local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force
         if not IsValid(ent) or ent.hz_dead then return end
 
         local dmgInfo = DamageInfo()
-        dmgInfo:SetDamage(max(dmg, ent:Health() + 10))
+        dmgInfo:SetDamage(lethal and max(dmg, ent:Health() + 10) or dmg)
         dmgInfo:SetDamageType(dmgType)
         dmgInfo:SetAttacker(IsValid(attacker) and attacker or game.GetWorld())
         dmgInfo:SetInflictor(IsValid(inflictor) and inflictor or (IsValid(attacker) and attacker or game.GetWorld()))
@@ -1076,7 +1092,7 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     if not isvector(src) or not isvector(dir) then return end
 
     dir = dir:GetNormalized()
-    local dist = data.Distance and data.Distance > 0 and data.Distance or 8192
+    local dist = data.Distance and data.Distance > 0 and data.Distance or 56756
     local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
     shotEnd:SetUnpacked(sx + dx * dist, sy + dy * dist, sz + dz * dist)
     shotIn.start, shotIn.endpos, shotIn.filter = src, shotEnd, ent
@@ -1112,17 +1128,14 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
 
     if not hit then return end
 
-    local hpMax = hit.shambler and CV.sh_health:GetFloat() or CV.health:GetFloat()
-    hit.hp = hit.hp - dmg / max(hpMax, 1)
-    if hit.hp <= 0 then
-        local attacker = IsValid(data.Attacker) and data.Attacker or ent
-        local weapon = attacker.GetActiveWeapon and attacker:GetActiveWeapon() or nil
-        KillAsReal(hit, hitX, hitY, hitZ, attacker, weapon, dmg, DMG_BULLET, dir * 3000)
-        FlushNet()
-    end
+    local attacker = IsValid(data.Attacker) and data.Attacker or ent
+    local weapon = attacker.GetActiveWeapon and attacker:GetActiveWeapon() or nil
+    HitAsReal(hit, hitX, hitY, hitZ, attacker, weapon, dmg, DMG_BULLET, dir * 3000, false)
+    FlushNet()
 end)
 
 local BLAST_REAL_MAX = 12
+local BLAST_NOTICE_MAX = 12
 local BLAST_MERGE_TIME, BLAST_MERGE_DIST = 0.3, 150
 local BLAST_ON_REMOVE = { grenade_ar2 = 100, rpg_missile = 100, npc_grenade_frag = 125, grenade_helicopter = 100,
     npc_satchel = 150, npc_tripmine = 150 }
@@ -1154,7 +1167,7 @@ local function Blast(center, amount, attacker, inflictor)
     local rad = math.Clamp(amount * 2.5, 150, 450)
     local radiusSqr = rad * rad
     local groupRadSqr = (rad + GROUP_RADIUS) * (rad + GROUP_RADIUS)
-    local shown = 0
+    local shown, noted = 0, 0
     for _, group in pairs(groups) do
         local gx, gy, gz = PosAt(group, now)
         local gdx, gdy, gdz = gx - center.x, gy - center.y, gz - center.z
@@ -1165,9 +1178,13 @@ local function Blast(center, amount, attacker, inflictor)
                 if dx * dx + dy * dy + dz * dz < radiusSqr then
                     if shown < BLAST_REAL_MAX then
                         shown = shown + 1
-                        KillAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400)
+                        HitAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400, true)
                     else
                         DropRow(row, true)
+                        if noted < BLAST_NOTICE_MAX then
+                            noted = noted + 1
+                            DeathNotice(attacker, inflictor)
+                        end
                     end
                 end
             end

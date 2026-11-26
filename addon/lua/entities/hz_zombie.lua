@@ -1385,7 +1385,12 @@ function ENT:HZ_Brain(now)
         link, nextId = nil, nil
     end
 
-    if link then
+    if link and link.ladder then
+        local climbed, run = self:HZ_Ladder(link, now)
+        if climbed then return end
+
+        goal = run
+    elseif link then
         local climbed, run = self:HZ_WallClimb(link.foot, link.top, link.vault)
         if climbed then return end
 
@@ -1835,6 +1840,70 @@ function ENT:HZ_StuckCheck(now)
             self.loco:ClearStuck()
         end
     end
+end
+
+HZ.LadderNext = HZ.LadderNext or {}
+
+function ENT:HZ_Ladder(link, now)
+    local start = link.foot
+    local pos = self:GetPos()
+    local dx, dy = pos.x - start.x, pos.y - start.y
+    if dx * dx + dy * dy > 30 * 30 or math.abs(pos.z - start.z) > 48 then return false, start end
+
+    if now < (HZ.LadderNext[link.id] or 0) then
+        self.loco:FaceTowards(start)
+        return false, pos
+    end
+
+    local seq = HZ.Pick(link.up and self.P.ladder_up or self.P.ladder_down)
+    if not seq then return false, start end
+
+    HZ.LadderNext[link.id] = now + (link.up and 0.9 or 1.1)
+    local up = link.up
+    local fromZ = up and link.bottomZ or (link.topZ - 60)
+    local toZ = up and (link.topZ - 64) or link.bottomZ
+    local speed = up and 100 or 82
+    local column = Vector(link.colX, link.colY, fromZ)
+    local gravity, stepHeight = self.loco:GetGravity(), self.loco:GetStepHeight()
+    self:SetAngles(Angle(0, (-link.normal):Angle().y, 0))
+    self.loco:SetGravity(0)
+    self.loco:SetStepHeight(0)
+    self.loco:Jump()
+    self.loco:SetVelocity(vector_origin)
+    self:SetPos(column)
+    self.hz_climbing, self.hz_inOnce, self.hz_yielded = true, true, true
+    self.hz_moveAnim = nil
+    self:HZ_SetSeq(seq)
+    local last = CurTime()
+    while not self.hz_dead do
+        coroutine.yield()
+        local tick = CurTime()
+        local step = HZ.AIDisabled() and 0 or speed * (tick - last)
+        last = tick
+        column.z = up and math.min(column.z + step, toZ) or math.max(column.z - step, toZ)
+        self:SetPos(column)
+        self.loco:SetVelocity(vector_origin)
+        if column.z == toZ then break end
+    end
+
+    self.hz_inOnce = nil
+    if up and not self.hz_dead then
+        local dismount = HZ.Pick(self.P.ladder_off)
+        if dismount then self:HZ_PlayOnce(dismount, 1, true, 1) end
+    end
+
+    self.hz_climbing = nil
+    self.loco:SetStepHeight(stepHeight)
+    self.loco:SetGravity(gravity)
+    if self.hz_dead then return true end
+
+    local land = up and link.land or link.bottomLand
+    if self:GetPos():DistToSqr(land) > 24 * 24 then self:SetPos(land + Vector(0, 0, 2)) end
+    self.hz_ownMove = engine.TickCount()
+    self.loco:ClearStuck()
+    self.hz_nextBrain = 0
+
+    return true
 end
 
 function ENT:HZ_WallClimb(foot, top, vault)

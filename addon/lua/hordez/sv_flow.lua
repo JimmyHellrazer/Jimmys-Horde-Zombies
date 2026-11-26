@@ -90,6 +90,8 @@ local function BuildGraph()
             links, saved = Flow.AddClimbLinks(graph, all)
             Flow.SaveLinks(saved, signature)
         end
+
+        links = links + Flow.AddLadderLinks(graph, all)
     end
 
     Flow.graph = graph
@@ -212,6 +214,76 @@ function Flow.AddClimbLinks(graph, all)
     end
 
     return count, saved
+end
+
+local LADDER_TOPS = { "GetTopForwardArea", "GetTopLeftArea", "GetTopRightArea", "GetTopBehindArea" }
+
+local function LinkEdge(graph, fromId, toId, cost, link)
+    if graph.climb[fromId] and graph.climb[fromId][toId] then return 0 end
+
+    local incoming = graph.inc[toId]
+    if not incoming then return 0 end
+
+    incoming[#incoming + 1] = fromId
+    graph.cost[toId][#incoming] = cost
+    graph.climb[fromId] = graph.climb[fromId] or {}
+    graph.climb[fromId][toId] = link
+
+    return 1
+end
+
+local function AddLadder(graph, ladder)
+    local bottomArea = ladder:GetBottomArea()
+    if not IsValid(bottomArea) or not graph.area[bottomArea:GetID()] then return 0 end
+
+    local normal = ladder:GetNormal()
+    normal.z = 0
+    if normal:LengthSqr() < 0.01 then return 0 end
+
+    normal:Normalize()
+    local column = ladder:GetBottom() + normal * 16
+    local bottomZ = bottomArea:GetZ(column)
+    local bottomLand = bottomArea:GetClosestPointOnArea(column)
+    local top = ladder:GetTop()
+    local count = 0
+    for _, getter in ipairs(LADDER_TOPS) do
+        local topArea = ladder[getter](ladder)
+        if IsValid(topArea) and topArea ~= bottomArea and graph.area[topArea:GetID()] then
+            local land = topArea:GetClosestPointOnArea(top - normal * 40)
+            local height = land and land.z - bottomZ
+            if height and height > CLIMB_MAX and not bottomArea:IsConnected(topArea) then
+                local shared = { ladder = true, id = ladder:GetID(), normal = normal, colX = column.x,
+                    colY = column.y, bottomZ = bottomZ, topZ = land.z, land = land, bottomLand = bottomLand,
+                    h = height }
+
+                local upLink = setmetatable({ up = true, foot = Vector(column.x, column.y, bottomZ), top = land },
+                    { __index = shared })
+                local downLink = setmetatable({ up = false, foot = land, top = bottomLand }, { __index = shared })
+                local bottomId, topId = bottomArea:GetID(), topArea:GetID()
+                count = count + LinkEdge(graph, bottomId, topId, height * 1.5 + 120, upLink)
+                count = count + LinkEdge(graph, topId, bottomId, height + 80, downLink)
+            end
+        end
+    end
+
+    return count
+end
+
+function Flow.AddLadderLinks(graph, all)
+    graph.climb = graph.climb or {}
+    local done, count = {}, 0
+    for i, area in ipairs(all) do
+        for _, ladder in ipairs(area:GetLadders() or {}) do
+            if IsValid(ladder) and not done[ladder:GetID()] then
+                done[ladder:GetID()] = true
+                count = count + AddLadder(graph, ladder)
+            end
+        end
+
+        if i % 64 == 0 then Breathe() end
+    end
+
+    return count
 end
 
 local LINK_MAGIC, LINK_VERSION = 0x485A4C4B, 1

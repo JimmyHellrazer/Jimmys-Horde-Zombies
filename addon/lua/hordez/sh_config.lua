@@ -1,5 +1,5 @@
 HZ = HZ or {}
-HZ.Version = "0.21.2"
+HZ.Version = "0.22.0"
 
 local FLAGS = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
 
@@ -146,6 +146,9 @@ HZ.SeqPools = {
     stroll     = { "Walk_Neutral_01", "Walk_Neutral_02", "Walk_Neutral_03", "Walk_Neutral_02b", "Walk_Neutral_04a",
         "Walk_Neutral_04b" },
     vault      = { "Climb36_Hurdle_04_InPlace" },
+    ladder_up  = { "Ladder_Ascend" },
+    ladder_down = { "Ladder_Descend" },
+    ladder_off = { "Ladder_Dismount_01", "Ladder_Dismount_02", "Ladder_Dismount_03", "Ladder_Dismount" },
     run_stop   = { "Running_to_Standing", "Running_to_Standing_02" },
     chair      = { "Sitting_in_Chair01" },
     chair_down = { "Standing_to_Sitting_in_Chair" },

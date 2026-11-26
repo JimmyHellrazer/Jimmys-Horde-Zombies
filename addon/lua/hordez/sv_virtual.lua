@@ -9,6 +9,7 @@ HZ.VCount = HZ.VCount or 0
 local rows = HZ.Virtual
 
 local sqrt, huge, random, floor, min, max = math.sqrt, math.huge, math.random, math.floor, math.min, math.max
+local band, rshift = bit.band, bit.rshift
 
 function HZ.VirtualOn()
     return CV.virt:GetBool()
@@ -86,8 +87,8 @@ local function WritePos(x, y, z)
 end
 
 local function WriteRowDel(entry)
-    net.WriteUInt(entry[1], 16)
-    net.WriteBool(entry[2])
+    net.WriteUInt(rshift(entry, 1), 16)
+    net.WriteBool(band(entry, 1) ~= 0)
 end
 
 local function WriteGroupDel(id)
@@ -290,7 +291,7 @@ local function DropRow(row, killed)
         row._pendAdd = nil
         Forget(pendAdd, row)
     else
-        pendDel[#pendDel + 1] = { row.id, killed and true or false }
+        pendDel[#pendDel + 1] = row.id * 2 + (killed and 1 or 0)
     end
 
     local group = row.group
@@ -331,7 +332,8 @@ local function NextLeg(group, now, x, y, z)
 
     local area = group.area
     if not area or not graph.area[area] then
-        local navArea = navmesh.GetNearestNavArea(Vector(x, y, z), false, 400, false, true)
+        probe:SetUnpacked(x, y, z)
+        local navArea = navmesh.GetNearestNavArea(probe, false, 400, false, true)
         area = navArea and navArea:GetID()
         if not area or not graph.area[area] then
             group.t1 = now + 2
@@ -365,7 +367,8 @@ local function NextLeg(group, now, x, y, z)
                 return
             end
 
-            local pos = nextArea:GetClosestPointOnArea(Vector(x, y, z))
+            probe:SetUnpacked(x, y, z)
+            local pos = nextArea:GetClosestPointOnArea(probe)
             local center = graph.center[nextId]
             local frac = 0.2 + random() * 0.7
             group.gx, group.gy, group.gz = pos.x + (center.x - pos.x) * frac, pos.y + (center.y - pos.y) * frac,
@@ -941,6 +944,8 @@ local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force
     end)
 end
 
+local shotEnd = Vector()
+
 hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     if HZ.VCount == 0 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
 
@@ -948,12 +953,12 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     if not isvector(src) or not isvector(dir) then return end
 
     dir = dir:GetNormalized()
-    shotIn.start, shotIn.endpos, shotIn.filter = src, src + dir * (data.Distance and data.Distance > 0 and data.Distance
-        or 8192), ent
-
+    local dist = data.Distance and data.Distance > 0 and data.Distance or 8192
+    local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
+    shotEnd:SetUnpacked(sx + dx * dist, sy + dy * dist, sz + dz * dist)
+    shotIn.start, shotIn.endpos, shotIn.filter = src, shotEnd, ent
     util.TraceLine(shotIn)
     local len = shotTr.HitPos:Distance(src)
-    local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
     local spread = HZ.BulletSpread(data.Spread)
     local count = max(data.Num or 1, 1)
     local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)

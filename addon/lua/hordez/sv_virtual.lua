@@ -604,6 +604,7 @@ local COVER_CELLS, COVER_RANGE = 360, 2500
 local COVER_RAD = 2 * math.pi / COVER_CELLS
 local coverCells = {}
 local coverRefs, coverX, coverY, coverZ, coverDist, coverOrder = {}, {}, {}, {}, {}, {}
+local coverActive, coverPassId = {}, 0
 
 local function CoverNearer(a, b)
     return coverDist[a] < coverDist[b]
@@ -667,24 +668,39 @@ local function CoverFor(eye, now)
         end
 
         local ref = coverRefs[i]
-        if not ref.hz_coverNow or cover < ref.hz_coverNow then ref.hz_coverNow = cover end
+        if ref.hz_cp ~= coverPassId then
+            ref.hz_cp = coverPassId
+            ref.hz_coverNow = cover
+            if not ref.hz_inCover then
+                ref.hz_inCover = true
+                coverActive[#coverActive + 1] = ref
+            end
+        elseif cover < ref.hz_coverNow then
+            ref.hz_coverNow = cover
+        end
         coverRefs[i] = nil
     end
 end
 
 local function CoverPass()
     local now = CurTime()
-    for zombie in pairs(HZ.Zombies) do zombie.hz_coverNow = nil end
-    for _, row in pairs(rows) do row.hz_coverNow = nil end
+    coverPassId = coverPassId + 1
+    local plys = player.GetAll()
+    for i = 1, #plys do CoverFor(plys[i]:EyePos(), now) end
 
-    for _, ply in ipairs(player.GetAll()) do CoverFor(ply:EyePos(), now) end
-
-    for zombie in pairs(HZ.Zombies) do
-        zombie.hz_cover = ((zombie.hz_cover or 0) + (zombie.hz_coverNow or 0)) * 0.5
-    end
-
-    for _, row in pairs(rows) do
-        row.hz_cover = ((row.hz_cover or 0) + (row.hz_coverNow or 0)) * 0.5
+    local n = #coverActive
+    for i = n, 1, -1 do
+        local ref = coverActive[i]
+        local cur = ref.hz_cp == coverPassId and ref.hz_coverNow or 0
+        local val = ((ref.hz_cover or 0) + cur) * 0.5
+        if cur == 0 and val < 0.01 then
+            ref.hz_cover, ref.hz_inCover = 0, nil
+            coverActive[i] = coverActive[n]
+            coverActive[n] = nil
+            n = n - 1
+        else
+            ref.hz_cover = val
+        end
     end
 end
 

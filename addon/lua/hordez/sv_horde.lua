@@ -120,6 +120,8 @@ local SEP_NEAR, SEP_LOOK = 12, 40
 local SEP_DX = { 0, -1, 1, 0, 0, -1, -1, 1, 1 }
 local SEP_DY = { 0, 0, 0, -1, 1, -1, 1, -1, 1 }
 
+local sepOut = Vector()
+
 function HZ.Separation(zombie, pos)
     local x, y, posZ = pos.x, pos.y, pos.z
     local cx, cy = floor(x / CELL), floor(y / CELL)
@@ -164,7 +166,8 @@ function HZ.Separation(zombie, pos)
 
     if count == 0 then return nil end
 
-    return Vector(px * 40, py * 40, 0)
+    sepOut:SetUnpacked(px * 40, py * 40, 0)
+    return sepOut
 end
 
 local targets, nextTargets = {}, 0
@@ -210,6 +213,9 @@ hook.Add("OnEntityCreated", "hordez_targets", function(ent)
 end)
 
 local ENGAGE_R = 2000
+local engageTr, engageFilter = {}, {}
+local engageIn = { mask = MASK_BLOCKLOS, filter = engageFilter, output = engageTr }
+
 timer.Create("hordez_npc_engage", 1, 0, function()
     if not HZ.CV.npc_hostile:GetBool() or HZ.Count == 0 or HZ.AIDisabled() then return end
 
@@ -219,20 +225,20 @@ timer.Create("hordez_npc_engage", 1, 0, function()
             if not (IsValid(cur) and cur:Health() > 0) then
                 local eye = ent:EyePos()
                 local best, bestDist
+                engageIn.start, engageFilter[1] = eye, ent
                 for zombie in pairs(HZ.Zombies) do
                     if IsValid(zombie) and not zombie.hz_dead then
                         local distSqr = zombie:GetPos():DistToSqr(eye)
                         if distSqr < ENGAGE_R * ENGAGE_R and (not bestDist or distSqr < bestDist)
                             and ent:Disposition(zombie) == D_HT then
-                            local tr = util.TraceLine({ start = eye, endpos = zombie:WorldSpaceCenter(),
-                                mask = MASK_BLOCKLOS,
-                                filter = { ent, zombie } })
-
-                            if not tr.Hit then best, bestDist = zombie, distSqr end
+                            engageIn.endpos, engageFilter[2] = zombie:WorldSpaceCenter(), zombie
+                            util.TraceLine(engageIn)
+                            if not engageTr.Hit then best, bestDist = zombie, distSqr end
                         end
                     end
                 end
 
+                engageFilter[1], engageFilter[2] = nil, nil
                 if best then
                     ent:UpdateEnemyMemory(best, best:GetPos())
                     ent:SetEnemy(best)
@@ -374,16 +380,24 @@ function HZ.IgnoringPlayers()
     return ignorePlayers ~= nil and ignorePlayers:GetBool()
 end
 
+local targetPool = {}
+
 function HZ.GetTargets()
     if CurTime() < nextTargets then return targets end
 
     nextTargets = CurTime() + 0.25
-    targets = {}
+    local count = 0
     if not HZ.IgnoringPlayers() then
-        for _, ply in ipairs(player.GetAll()) do
+        local plys = player.GetAll()
+        for i = 1, #plys do
+            local ply = plys[i]
             if ply:Alive() and not ply:IsFlagSet(FL_NOTARGET) and ply:GetMoveType() ~= MOVETYPE_NOCLIP
                 and not HZ.KnockedOut(ply) then
-                targets[#targets + 1] = { ent = ply, pos = ply:GetPos(), ply = true }
+                count = count + 1
+                local entry = targetPool[count] or {}
+                targetPool[count] = entry
+                entry.ent, entry.pos, entry.ply = ply, ply:GetPos(), true
+                targets[count] = entry
             end
         end
     end
@@ -391,11 +405,16 @@ function HZ.GetTargets()
     if HZ.CV.target_npcs:GetBool() then
         for ent in pairs(HZ.NPCTargets) do
             if IsValid(ent) and ent:Health() > 0 and not ent:IsFlagSet(FL_NOTARGET) then
-                targets[#targets + 1] = { ent = ent, pos = ent:GetPos() }
+                count = count + 1
+                local entry = targetPool[count] or {}
+                targetPool[count] = entry
+                entry.ent, entry.pos, entry.ply = ent, ent:GetPos(), nil
+                targets[count] = entry
             end
         end
     end
 
+    for i = #targets, count + 1, -1 do targets[i] = nil end
     return targets
 end
 

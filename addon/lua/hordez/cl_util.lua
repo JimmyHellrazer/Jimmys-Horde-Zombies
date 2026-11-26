@@ -231,22 +231,29 @@ local LOOK_AHEAD = 0.3
 local occludeOut = {}
 local occludeEnd = Vector()
 local occludeIn = { mask = CONTENTS_SOLID, output = occludeOut, endpos = occludeEnd }
+local band = bit.band
+local TRANS_SURF = bit.bor(SURF_TRANS or 0, SURF_NODRAW or 0, SURF_SKY or 0)
+local TRANS_CONT = bit.bor(CONTENTS_WINDOW or 0, CONTENTS_GRATE or 0)
 
 local function Blocked(from, tx, ty, tz)
     occludeIn.start = from
     occludeEnd:SetUnpacked(tx, ty, tz)
     util.TraceLine(occludeIn)
 
-    return occludeOut.Hit and occludeOut.HitWorld
+    return occludeOut.Hit and occludeOut.HitWorld and not occludeOut.HitSky
+        and band(occludeOut.SurfaceFlags or 0, TRANS_SURF) == 0
+        and band(occludeOut.Contents or 0, TRANS_CONT) == 0
 end
 
 local function Hidden(ent, px, py, pz, eye, eyeAhead)
-    if not Blocked(eye, px, py, pz + 64) or not Blocked(eye, px, py, pz + 8) then return false end
+    if not Blocked(eye, px, py, pz + 64) or not Blocked(eye, px, py, pz + 36)
+        or not Blocked(eye, px, py, pz + 8) then return false end
 
     local vel = ent:GetVelocity()
     local ax, ay, az = px + vel.x * LOOK_AHEAD, py + vel.y * LOOK_AHEAD, pz + vel.z * LOOK_AHEAD
 
-    return Blocked(eyeAhead, ax, ay, az + 64) and Blocked(eyeAhead, ax, ay, az + 8)
+    return Blocked(eyeAhead, ax, ay, az + 64) and Blocked(eyeAhead, ax, ay, az + 36)
+        and Blocked(eyeAhead, ax, ay, az + 8)
 end
 
 local pass = 0
@@ -366,6 +373,13 @@ timer.Create("hordez_scope_zoom", 0.2, 0, function()
     end
 end)
 
+local camPos, camAim, hasCam = Vector(), Vector(1, 0, 0), false
+hook.Add("RenderScene", "hordez_cam", function(origin, angles)
+    camPos:Set(origin)
+    camAim:Set(angles:Forward())
+    hasCam = true
+end)
+
 timer.Create("hordez_detail", 0.25, 0, function()
     local count = #list
     if count == 0 then return end
@@ -374,9 +388,9 @@ timer.Create("hordez_detail", 0.25, 0, function()
     if not IsValid(ply) then return end
 
     local t0 = HZ.ProfOn and SysTime()
-    local eye = EyePos()
+    local eye = hasCam and camPos or ply:EyePos()
     local ex, ey, ez = eye.x, eye.y, eye.z
-    local aim = EyeVector()
+    local aim = hasCam and camAim or ply:GetAimVector()
     local aimX, aimY, aimZ = aim.x, aim.y, aim.z
     local occlude = cvOcclude:GetBool()
     local eyeAhead = eye + ply:GetVelocity() * LOOK_AHEAD

@@ -1205,7 +1205,9 @@ end
 
 function ENT:HZ_NearestTarget(pos)
     local best, bestDist = nil, 1200 * 1200
-    for _, list in ipairs(HZ.GetTargets()) do
+    local targets = HZ.GetTargets()
+    for i = 1, #targets do
+        local list = targets[i]
         if IsValid(list.ent) and math.abs(list.pos.z - pos.z) < 200 then
             local distSqr = list.pos:DistToSqr(pos)
             if distSqr < bestDist then best, bestDist = list.ent, distSqr end
@@ -1431,14 +1433,24 @@ function ENT:HZ_Brain(now)
         end
 
         local lateral = self.hz_flankSlot * width * math.Clamp((targetDist - closeDist) / ramp, 0, 1)
-        local to = Vector(goal.x - pos.x, goal.y - pos.y, 0)
-        if math.abs(lateral) > 4 and to:LengthSqr() > 1 then
-            to:Normalize()
-            local flankGoal = goal + Vector(-to.y, to.x, 0) * lateral
-            if not HullTrace(pos + UP20, flankGoal + UP20, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit
-                and (not direct or not HullTrace(flankGoal + UP20, targetPos + UP20, FLANK_MINS, FLANK_MAXS,
-                MASK_NPCSOLID_BRUSHONLY).Hit) then
-                goal = flankGoal
+        if math.abs(lateral) > 4 then
+            local dx, dy = goal.x - pos.x, goal.y - pos.y
+            local lenSqr = dx * dx + dy * dy
+            if lenSqr > 1 then
+                local invLen = lateral / math.sqrt(lenSqr)
+                local fx, fy, fz = goal.x - dy * invLen, goal.y + dx * invLen, goal.z
+                scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 20)
+                scratchTo:SetUnpacked(fx, fy, fz + 20)
+                if not HullTrace(scratchFrom, scratchTo, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit then
+                    local ok = not direct
+                    if not ok then
+                        scratchFrom:SetUnpacked(fx, fy, fz + 20)
+                        scratchTo:SetUnpacked(targetPos.x, targetPos.y, targetPos.z + 20)
+                        ok = not HullTrace(scratchFrom, scratchTo, FLANK_MINS, FLANK_MAXS,
+                            MASK_NPCSOLID_BRUSHONLY).Hit
+                    end
+                    if ok then goal = Vector(fx, fy, fz) end
+                end
             end
         end
     end
@@ -1455,9 +1467,10 @@ function ENT:HZ_Brain(now)
     if not self.hz_falling then self:HZ_SetMove("run") end
     if targetDist > 70 and playerDist < hotDist and feelBlocked ~= false and CV.climb:GetBool()
         and now >= (self.hz_nextVaultTry or 0) then
-        local from = pos + UP20
-        local aheadTr = HullTrace(from, from + self:GetForward() * 30, AHEAD_MINS, AHEAD_MAXS, MASK_NPCSOLID,
-            NO_ZOMBIES)
+        local fwd = self:GetForward()
+        scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 20)
+        scratchTo:SetUnpacked(pos.x + fwd.x * 30, pos.y + fwd.y * 30, pos.z + 20 + fwd.z * 30)
+        local aheadTr = HullTrace(scratchFrom, scratchTo, AHEAD_MINS, AHEAD_MAXS, MASK_NPCSOLID, NO_ZOMBIES)
 
         if aheadTr.Hit and not aheadTr.StartSolid then
             if self:HZ_TryVault(goal) then return end

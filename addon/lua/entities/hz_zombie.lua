@@ -52,6 +52,7 @@ local NO_BODIES = { "hz_zombie", "player", "prop_ragdoll" }
 local UP20 = Vector(0, 0, 20)
 local traceResult = {}
 local traceInput = { output = traceResult }
+local scratchFrom, scratchTo = Vector(), Vector()
 local pairFilter = {}
 
 local function HullTrace(from, to, mins, maxs, mask, filter)
@@ -344,15 +345,20 @@ function ENT:HZ_WatchPush(vel)
     local dt = now - lastTime
     if dt <= 0 or dt > 0.3 then return end
 
-    local deltaVel = vel - lastVel
-    if vel:Length() > 180 and deltaVel:Dot(vel) > 0 and deltaVel:Length() > LOCO_ACCEL * dt + 200 then
-        return self:HZ_ExternalPush(deltaVel)
+    local dvx, dvy = vel.x - lastVel.x, vel.y - lastVel.y
+    local vLenSqr = vel.x * vel.x + vel.y * vel.y
+    local lvLenSqr = lastVel.x * lastVel.x + lastVel.y * lastVel.y
+    if vLenSqr > 180 * 180 and (dvx * vel.x + dvy * vel.y) > 0 then
+        local dvLim = LOCO_ACCEL * dt + 200
+        if dvx * dvx + dvy * dvy > dvLim * dvLim then
+            return self:HZ_ExternalPush(Vector(dvx, dvy, 0))
+        end
     end
 
-    local moved = pos - lastPos
-    moved.z = 0
-    if moved:Length() > math.max(lastVel:Length(), vel:Length()) * dt + 24 then
-        return self:HZ_ExternalPush(moved)
+    local mx, my = pos.x - lastPos.x, pos.y - lastPos.y
+    local mLim = math.sqrt(lvLenSqr > vLenSqr and lvLenSqr or vLenSqr) * dt + 24
+    if mx * mx + my * my > mLim * mLim then
+        return self:HZ_ExternalPush(Vector(mx, my, 0))
     end
 end
 
@@ -1210,7 +1216,10 @@ function ENT:HZ_NearestTarget(pos)
 end
 
 function ENT:HZ_Clear(pos, target)
-    local tr = HullTrace(pos + UP20, target:GetPos() + UP20, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID_BRUSHONLY,
+    local tpos = target:GetPos()
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 20)
+    scratchTo:SetUnpacked(tpos.x, tpos.y, tpos.z + 20)
+    local tr = HullTrace(scratchFrom, scratchTo, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID_BRUSHONLY,
         FilterPair(self, target))
 
     if not tr.Hit then return true end
@@ -1732,9 +1741,10 @@ function ENT:HZ_Feel(pos, goal)
     if len < 24 then return goal, false end
 
     dx, dy = dx / len, dy / len
-    local from = pos + FEEL_UP
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 24)
     local reach = math.min(FEEL_REACH, len)
-    local ahead = LineTrace(from, from + Vector(dx * reach, dy * reach, 0), MASK_NPCSOLID, NO_ZOMBIES)
+    scratchTo:SetUnpacked(pos.x + dx * reach, pos.y + dy * reach, pos.z + 24)
+    local ahead = LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID, NO_ZOMBIES)
     if not ahead.Hit or ahead.StartSolid then return goal, false end
 
     local normal = ahead.HitNormal
@@ -1744,7 +1754,8 @@ function ENT:HZ_Feel(pos, goal)
         local side = pass == 1 and first or -first
         local sx = dx * FEEL_COS - dy * FEEL_SIN * side
         local sy = dy * FEEL_COS + dx * FEEL_SIN * side
-        if not LineTrace(from, from + Vector(sx * FEEL_REACH, sy * FEEL_REACH, 0), MASK_NPCSOLID, NO_ZOMBIES).Hit then
+        scratchTo:SetUnpacked(pos.x + sx * FEEL_REACH, pos.y + sy * FEEL_REACH, pos.z + 24)
+        if not LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID, NO_ZOMBIES).Hit then
             return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
         end
     end

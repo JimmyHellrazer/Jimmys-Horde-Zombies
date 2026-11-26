@@ -18,8 +18,7 @@ if CLIENT then
 
     local band = bit.band
     local SHADOW_DEPTH = STUDIO_SHADOWDEPTHTEXTURE or 0x40000000
-    local cvDepthDist = CreateClientConVar("hz_depth_dist", "1200", true, false,
-        "Zombies beyond this range are left out of flashlight and projected texture shadows (0 = never)")
+    local cvDepthDist = CreateClientConVar("hz_depth_dist", "1200", true, false, "Flashlight shadows within (0: always)")
 
     local depthDistSqr = cvDepthDist:GetFloat()
     depthDistSqr = depthDistSqr > 0 and depthDistSqr * depthDistSqr or 0

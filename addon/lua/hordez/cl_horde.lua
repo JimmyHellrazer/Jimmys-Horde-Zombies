@@ -1,7 +1,6 @@
-local maxRags = CreateClientConVar("hz_ragdoll_max", "24", true, false, "Max zombie ragdolls kept on screen")
-local ragTime = CreateClientConVar("hz_ragdoll_time", "25", true, false, "Seconds before a zombie ragdoll is removed")
-CreateClientConVar("hz_show_markers", "0", true, false,
-    "Always draw director/spawner markers (otherwise only with physgun/toolgun)")
+local maxRags = CreateClientConVar("hz_ragdoll_max", "24", true, false, "Max ragdolls")
+local ragTime = CreateClientConVar("hz_ragdoll_time", "25", true, false, "Ragdoll lifetime (s)")
+CreateClientConVar("hz_show_markers", "0", true, false, "Always show director and spawner markers")
 
 local rags = {}
 local ragPool, ragPoolCount = {}, 0
@@ -44,6 +43,7 @@ local function ParkRagdoll(rag)
     rag:SetNoDraw(true)
     rag:DrawShadow(false)
     rag:DestroyShadow()
+    HZ.SetFace(rag, nil)
     for i = 0, rag:GetPhysicsObjectCount() - 1 do
         local phys = rag:GetPhysicsObjectNum(i)
         if IsValid(phys) then
@@ -120,13 +120,11 @@ end
 
 timer.Create("hordez_rags", 1, 0, PruneRagdolls)
 
-local deathAnims = CreateClientConVar("hz_death_anims", "1", true, false,
-    "Play L4D2 death animations before the ragdoll")
+local deathAnims = CreateClientConVar("hz_death_anims", "1", true, false, "Death animations")
 
-local deathDist = CreateClientConVar("hz_death_anim_dist", "1500", true, false,
-    "Beyond this distance zombies ragdoll at once")
+local deathDist = CreateClientConVar("hz_death_anim_dist", "1500", true, false, "Death animations within")
 
-local deathMax = CreateClientConVar("hz_death_anim_max", "10", true, false, "Max death animations playing at once")
+local deathMax = CreateClientConVar("hz_death_anim_max", "10", true, false, "Max death animations at once")
 
 local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
     local t0 = HZ.ProfOn and SysTime()
@@ -137,6 +135,7 @@ local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
 
     rag:SetSkin(skin)
     rag:SetColor(src:GetColor())
+    HZ.SetFace(rag, src.hz_look)
     for i, value in pairs(groups) do rag:SetBodygroup(i, value) end
     rag:SetPos(src:GetPos())
     rag:SetAngles(src:GetAngles())
@@ -264,6 +263,7 @@ local function ReleaseDeathModel(csm, mdl, kicks)
         csm:SetNoDraw(true)
         csm:DrawShadow(false)
         csm:DestroyShadow()
+        HZ.SetFace(csm, nil)
         local bucket = csmPool[mdl]
         if not bucket then
             bucket = {}
@@ -406,6 +406,7 @@ local function StartDeath(ent, kind, dir, groups, vel)
 
     deathModel:SetSkin(ent:GetSkin())
     deathModel:SetColor(ent:GetColor())
+    HZ.SetFace(deathModel, ent.hz_look)
     for i, value in pairs(groups) do deathModel:SetBodygroup(i, value) end
     deathModel:SetPos(ent:GetPos())
     deathModel:SetAngles(Angle(0, ent:GetAngles().y, 0))
@@ -634,7 +635,7 @@ net.Receive("hz_rag", function()
     ent:DrawShadow(false)
 end)
 
-local burnMax = CreateClientConVar("hz_burn_max", "10", true, false, "Max burning zombie bodies at once")
+local burnMax = CreateClientConVar("hz_burn_max", "10", true, false, "Max burning bodies")
 local FLAME_BONES = { "Bip01_Pelvis", "Bip01_Spine2", "Bip01_Head1", "Bip01_L_Forearm", "Bip01_R_Forearm",
     "Bip01_L_UpperArm", "Bip01_R_UpperArm", "Bip01_L_Thigh", "Bip01_R_Thigh", "Bip01_L_Calf", "Bip01_R_Calf" }
 

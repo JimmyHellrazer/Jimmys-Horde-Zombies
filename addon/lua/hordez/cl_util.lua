@@ -204,23 +204,17 @@ function HZ.NearestZombies(eye, maxDistSqr, limit, out, outDist, alertedOnly)
     return span
 end
 
-local cvLod = CreateClientConVar("hz_lod_dist", "500", true, false,
-    "Zombies switch to the first reduced model at this distance, the next at 2x and the last at 4x. 0 = let the engine choose")
+local cvLod = CreateClientConVar("hz_lod_dist", "500", true, false, "Simplified models from (0: engine decides)")
 
-local cvShadow = CreateClientConVar("hz_shadow_dist", "1000", true, false,
-    "Zombies closer than this cast a shadow. 0 = none, -1 = all of them")
+local cvShadow = CreateClientConVar("hz_shadow_dist", "1000", true, false, "Shadows within (-1: always, 0: never)")
 
-local cvDraw = CreateClientConVar("hz_draw_dist", "0", true, false,
-    "Zombies beyond this distance are not drawn. 0 = no limit")
+local cvDraw = CreateClientConVar("hz_draw_dist", "0", true, false, "Draw distance (0: no limit)")
 
-local cvCrowd = CreateClientConVar("hz_crowd_lod", "1", true, false,
-    "Zombies buried behind others in a dense crowd drop to reduced models and lose their shadow")
+local cvCrowd = CreateClientConVar("hz_crowd_lod", "1", true, false, "Simplify buried zombies in crowds")
 
-local cvCrowdHide = CreateClientConVar("hz_crowd_hide", "0", true, false,
-    "Zombies with at least this many rows of others in front of them are not drawn at all. 0 = always draw")
+local cvCrowdHide = CreateClientConVar("hz_crowd_hide", "0", true, false, "Hide zombies behind this many rows (0: never)")
 
-local cvOcclude = CreateClientConVar("hz_occlusion", "1", true, false,
-    "Skip drawing zombies hidden behind world geometry")
+local cvOcclude = CreateClientConVar("hz_occlusion", "1", true, false, "Skip zombies behind walls")
 
 function HZ.SyncNoDraw(ent)
     local hide = ent.hz_ragdolled or ent.hz_far or (ent.hz_imp and (ent.hz_fade or 1) >= 1) or false

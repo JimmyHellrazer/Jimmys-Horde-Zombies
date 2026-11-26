@@ -1,6 +1,6 @@
-local cvOn = CreateClientConVar("hz_steps", "1", true, false, "Zombie footstep sounds")
-local cvMax = CreateClientConVar("hz_steps_max", "12", true, false, "How many of the nearest zombies make footsteps")
-local cvDist = CreateClientConVar("hz_steps_dist", "1400", true, false, "Footsteps only within this distance")
+local cvOn = CreateClientConVar("hz_steps", "1", true, false, "Footsteps")
+local cvMax = CreateClientConVar("hz_steps_max", "12", true, false, "Max zombies with footsteps")
+local cvDist = CreateClientConVar("hz_steps_dist", "1400", true, false, "Footstep range")
 local cvVol = CreateClientConVar("hz_steps_volume", "0.8", true, false, "Footstep volume")
 
 local SURF = {

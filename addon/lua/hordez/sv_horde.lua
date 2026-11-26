@@ -673,6 +673,19 @@ for _, sounds in pairs(HZ.Snd) do
     end
 end
 
+local soundLengths = {}
+
+local function SoundLength(path)
+    local length = soundLengths[path]
+    if not length then
+        length = SoundDuration(path)
+        length = length > 0 and length or 1
+        soundLengths[path] = length
+    end
+
+    return length
+end
+
 local tokens, lastTok = 0, 0
 
 function HZ.Voice(zombie, kind, level, force)
@@ -699,6 +712,7 @@ function HZ.Voice(zombie, kind, level, force)
     zombie.hz_voiceUntil = now + (zombie.hz_shambler and 2.5 or 1.5)
     local pitch = zombie.hz_shambler and math.random(84, 94) or math.random(94, 106)
     zombie:EmitSound(path, level or 75, pitch, 1, CHAN_VOICE)
+    zombie:SetNW2Float("hz_yell", now + math.Clamp(SoundLength(path) * 100 / pitch, 0.3, 4))
 end
 
 HZ.ShamblerVoice = { rage = "idle", rageat = "idle", alert = "idle", becomealert = "idle", enraged = nil,

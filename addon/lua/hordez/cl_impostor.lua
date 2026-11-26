@@ -1,15 +1,11 @@
-local cvOn = CreateClientConVar("hz_impostors", "1", true, false,
-    "Draw far zombies as flat impostors instead of models")
+local cvOn = CreateClientConVar("hz_impostors", "1", true, false, "Distant zombies as impostors")
 
-local cvDist = CreateClientConVar("hz_impostor_dist", "2500", true, false,
-    "Zombies beyond this distance are drawn as impostors")
+local cvDist = CreateClientConVar("hz_impostor_dist", "2500", true, false, "Impostor distance")
 
-local cvLight = CreateClientConVar("hz_impostor_light", "1", true, false,
-    "Brightness of impostors against the real models")
+local cvLight = CreateClientConVar("hz_impostor_light", "1", true, false, "Impostor brightness")
 
-local cvFog = CreateClientConVar("hz_impostor_fog", "1", true, false, "Fade impostors into the map's fog")
-local cvDebug = CreateClientConVar("hz_impostor_debug", "0", false, false,
-    "Show the impostor atlas and count on screen")
+local cvFog = CreateClientConVar("hz_impostor_fog", "1", true, false, "Impostor fog")
+local cvDebug = CreateClientConVar("hz_impostor_debug", "0", false, false, "Impostor debug overlay")
 
 local DU, DV = 1 / 32, 1 / 16
 local NEAR_DIST = 1200

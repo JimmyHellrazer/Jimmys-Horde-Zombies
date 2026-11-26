@@ -1,11 +1,21 @@
 local cvOn = CreateClientConVar("hz_impostors", "1", true, false, "Distant zombies as impostors")
-
 local cvDist = CreateClientConVar("hz_impostor_dist", "2500", true, false, "Impostor distance")
-
 local cvLight = CreateClientConVar("hz_impostor_light", "1", true, false, "Impostor brightness")
-
 local cvFog = CreateClientConVar("hz_impostor_fog", "1", true, false, "Impostor fog")
 local cvDebug = CreateClientConVar("hz_impostor_debug", "0", false, false, "Impostor debug overlay")
+
+local impOn, impDist, impLight, impFog, impDebug = true, 2500, 1, true, false
+local function ReadImpConVars()
+    impOn = cvOn:GetBool()
+    impDist = cvDist:GetFloat()
+    impLight = cvLight:GetFloat()
+    impFog = cvFog:GetBool()
+    impDebug = cvDebug:GetBool()
+end
+ReadImpConVars()
+for _, cv in ipairs({ cvOn, cvDist, cvLight, cvFog, cvDebug }) do
+    cvars.AddChangeCallback(cv:GetName(), ReadImpConVars, "hordez_impostors")
+end
 
 local DU, DV = 1 / 32, 1 / 16
 local NEAR_DIST = 1200
@@ -319,21 +329,22 @@ end
 local function GatherBucket(bucket, now)
     local list = HZ.ClientZombies
     local count = 0
-    local want = cvOn:GetBool() and ready
-    local fadeEnd = cvDist:GetFloat()
+    local want = impOn and ready
+    local fadeEnd = impDist
     local fadeStart = fadeEnd * FADE_BAND
     local fadeStartSqr = fadeStart * fadeStart
     local eye = EyePos()
     ex, ey = eye.x, eye.y
     local ez = eye.z
-    bright = cvLight:GetFloat() * 127.5
+    bright = impLight * 127.5
     local syncNoDraw = HZ.SyncNoDraw
 
     farLayer.buckets[bucket].count, nearLayer.buckets[bucket].count = 0, 0
 
     for i = 1, #list do
         local ent = list[i]
-        if IsValid(ent) and ent:EntIndex() % BUCKETS == bucket then
+        local idx = IsValid(ent) and ent:EntIndex()
+        if idx and idx % BUCKETS == bucket then
             local distSqr = ent.hz_d2
             local impostor = want and distSqr and not ent.hz_ragdolled and not ent:IsDormant()
                 and distSqr > fadeStartSqr and count < BUCKET_QUADS
@@ -373,7 +384,7 @@ local function GatherBucket(bucket, now)
 
                 EmitQuad(bucket, ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
                     or ent:GetAngles().y * (PI / 180),
-                    ent:EntIndex(), female, shambler, dist, fade)
+                    idx, female, shambler, dist, fade)
 
                 count = count + 1
             end
@@ -496,7 +507,7 @@ local function ShaderClock(since, clock)
     local fog, fogEnd, fogRange = 0, 1, 1
     local mode = render.GetFogMode()
     local fogStart, fogStop = render.GetFogDistances()
-    if cvFog:GetBool() and mode ~= MATERIAL_FOG_NONE and mode ~= MATERIAL_FOG_LINEAR_BELOW_FOG_Z and fogStart
+    if impFog and mode ~= MATERIAL_FOG_NONE and mode ~= MATERIAL_FOG_LINEAR_BELOW_FOG_Z and fogStart
         and fogStop and fogStop > fogStart then
         fog, fogEnd, fogRange = 1, fogStop, fogStop - fogStart
         local r, g, b = render.GetFogColor()
@@ -539,7 +550,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     if depth or sky or sky3d then return end
 
     local now = CurTime()
-    if not ready and not bakeAt and ((cvOn:GetBool() and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
+    if not ready and not bakeAt and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
         if not LoadCache() then StartBake() end
     end
 
@@ -549,7 +560,8 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     local t0 = HZ.ProfOn and SysTime()
     ShaderClock(now - epoch, now % 4096)
     render.OverrideDepthEnable(true, true)
-    for _, layer in ipairs(LAYERS) do
+    for l = 1, 2 do
+        local layer = LAYERS[l]
         render.SetMaterial(layer.mat)
         for b = 0, BUCKETS - 1 do
             local imesh = layer.buckets[b].imesh
@@ -562,7 +574,7 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
 end)
 
 hook.Add("HUDPaint", "hordez_impostor_debug", function()
-    if not cvDebug:GetBool() then return end
+    if not impDebug then return end
 
     surface.SetDrawColor(40, 40, 40, 255)
     surface.DrawRect(16, 16, 512, 512)

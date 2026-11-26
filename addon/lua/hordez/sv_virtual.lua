@@ -486,7 +486,7 @@ net.Receive("hz_zoom", function(_, ply)
     if (ply.hz_zoomNext or 0) > now then return end
 
     ply.hz_zoomNext = now + 0.1
-    local fov = net.ReadFloat()
+    local fov = net.ReadUInt(8) / 3
     if fov > 1 and fov < 65 then
         ply.hz_zoomFov = math.Clamp(fov, 2, 65)
         ply.hz_zoomPos = net.ReadVector()

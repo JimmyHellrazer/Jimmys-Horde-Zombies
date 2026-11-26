@@ -312,7 +312,8 @@ end
 
 local nextZoomSample, sampleFrame = 0, -1
 local bestFov, bestOrigin, bestDir = 180, nil, nil
-local sentZoom = false
+local sentZoom, lastZoomAt, lastZoomQFov = false, 0, 0
+local lastZoomPos, lastZoomDir = Vector(), Vector()
 
 hook.Add("PreDrawOpaqueRenderables", "hordez_scope_zoom", function(depth, sky, sky3d)
     if depth or sky or sky3d then return end
@@ -339,17 +340,26 @@ end)
 timer.Create("hordez_scope_zoom", 0.2, 0, function()
     if bestFov < 65 and bestOrigin and bestDir then
         HZ.ScopeFov = bestFov
-        sentZoom = true
-        net.Start("hz_zoom", true)
-        net.WriteFloat(bestFov)
-        net.WriteVector(bestOrigin)
-        net.WriteNormal(bestDir)
-        net.SendToServer()
+        local now = CurTime()
+        local qFov = math.Clamp(floor(bestFov * 3 + 0.5), 1, 255)
+        local changed = not sentZoom or qFov ~= lastZoomQFov
+            or bestOrigin:DistToSqr(lastZoomPos) > 16
+            or bestDir:Dot(lastZoomDir) < 0.9995
+        if changed or now - lastZoomAt >= 0.6 then
+            sentZoom, lastZoomAt, lastZoomQFov = true, now, qFov
+            lastZoomPos:Set(bestOrigin)
+            lastZoomDir:Set(bestDir)
+            net.Start("hz_zoom", true)
+            net.WriteUInt(qFov, 8)
+            net.WriteVector(bestOrigin)
+            net.WriteNormal(bestDir)
+            net.SendToServer()
+        end
     elseif sentZoom then
         HZ.ScopeFov = nil
         sentZoom = false
         net.Start("hz_zoom", true)
-        net.WriteFloat(0)
+        net.WriteUInt(0, 8)
         net.SendToServer()
     else
         HZ.ScopeFov = nil

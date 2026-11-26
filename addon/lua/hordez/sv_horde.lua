@@ -693,16 +693,44 @@ for _, sounds in pairs(HZ.Snd) do
 end
 
 local soundLengths = {}
+local soundPending = {}
 
-local function SoundLength(path)
+local function WavDuration(data)
+    if not data or #data < 44 or data:sub(1, 4) ~= "RIFF" or data:sub(9, 12) ~= "WAVE" then return nil end
+    local pos, len, byteRate, dataSize = 13, #data, nil, nil
+    while pos + 7 <= len do
+        local id = data:sub(pos, pos + 3)
+        local a, b, c, d = data:byte(pos + 4, pos + 7)
+        local size = a + b * 256 + c * 65536 + d * 16777216
+        if id == "fmt " and pos + 19 <= len then
+            local e, f, g, h = data:byte(pos + 16, pos + 19)
+            byteRate = e + f * 256 + g * 65536 + h * 16777216
+        elseif id == "data" then
+            dataSize = size
+        end
+        if byteRate and dataSize then return byteRate > 0 and dataSize / byteRate or nil end
+        pos = pos + 8 + size + (size % 2)
+    end
+end
+
+local function SoundLength(path, zombie, now, pitch)
     local length = soundLengths[path]
-    if not length then
-        length = SoundDuration(path)
-        length = length > 0 and length or 1
-        soundLengths[path] = length
+    if length then return length end
+
+    if not soundPending[path] then
+        soundPending[path] = true
+        file.AsyncRead("sound/" .. path, "GAME", function(_, _, status, data)
+            soundPending[path] = nil
+            local dur = status == FSASYNC_OK and WavDuration(data) or 1
+            dur = dur and dur > 0 and dur or 1
+            soundLengths[path] = dur
+            if IsValid(zombie) and zombie.hz_yellStart == now then
+                zombie:SetNW2Float("hz_yell", now + math.Clamp(dur * 100 / pitch, 0.3, 4))
+            end
+        end)
     end
 
-    return length
+    return 1
 end
 
 local tokens, lastTok = 0, 0
@@ -731,7 +759,8 @@ function HZ.Voice(zombie, kind, level, force)
     zombie.hz_voiceUntil = now + (zombie.hz_shambler and 2.5 or 1.5)
     local pitch = zombie.hz_shambler and math.random(84, 94) or math.random(94, 106)
     zombie:EmitSound(path, level or 75, pitch, 1, CHAN_VOICE)
-    zombie:SetNW2Float("hz_yell", now + math.Clamp(SoundLength(path) * 100 / pitch, 0.3, 4))
+    zombie.hz_yellStart = now
+    zombie:SetNW2Float("hz_yell", now + math.Clamp(SoundLength(path, zombie, now, pitch) * 100 / pitch, 0.3, 4))
 end
 
 HZ.ShamblerVoice = { rage = "idle", rageat = "idle", alert = "idle", becomealert = "idle", enraged = nil,

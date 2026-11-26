@@ -1,4 +1,5 @@
 import bpy, sys, os
+from mathutils import kdtree
 
 def read_smd(path):
     lines = open(path, encoding='latin1').read().split('\n')
@@ -16,7 +17,7 @@ def read_smd(path):
             n = int(p[9]) if len(p) > 9 else 0
             links = [(int(p[10 + 2 * j]), float(p[11 + 2 * j])) for j in range(n)]
             if not links: links = [(int(p[0]), 1.0)]
-            vs.append((pos, uv, links))
+            vs.append((pos, uv, links, lines[i + k]))
         tris.append((mat, vs))
         i += 4
     return head, tris
@@ -26,7 +27,7 @@ def build(name, tris):
     for mat, vs in tris:
         if mat not in mats: mats.append(mat)
         f = []
-        for pos, uv, links in vs:
+        for pos, uv, links, _ in vs:
             k = (round(pos[0], 4), round(pos[1], 4), round(pos[2], 4))
             if k not in key:
                 key[k] = len(verts); verts.append(pos); weights.append(links)
@@ -63,7 +64,27 @@ def build(name, tris):
     if border: dg.add(list(border), 0.0, 'REPLACE')
     return ob, mats
 
-def write_smd(path, head, ob, mats, ratio):
+def corner_lookup(tris):
+    by_mat = {}
+    for mat, vs in tris:
+        spots = by_mat.setdefault(mat, {})
+        for pos, uv, _, raw in vs:
+            spots.setdefault(pos, []).append((uv, raw))
+    out = {}
+    for mat, spots in by_mat.items():
+        points = list(spots)
+        tree = kdtree.KDTree(len(points))
+        for i, p in enumerate(points): tree.insert(p, i)
+        tree.balance()
+        out[mat] = (tree, points, spots)
+    return out
+
+def snap(lookup, mat, co, uv):
+    tree, points, spots = lookup[mat]
+    _, index, _ = tree.find(co)
+    return min(spots[points[index]], key=lambda c: (c[0][0] - uv[0]) ** 2 + (c[0][1] - uv[1]) ** 2)[1]
+
+def write_smd(path, head, ob, mats, ratio, lookup):
     mod = ob.modifiers.new('dec', 'DECIMATE')
     mod.decimate_type = 'COLLAPSE'
     mod.ratio = ratio
@@ -75,22 +96,14 @@ def write_smd(path, head, ob, mats, ratio):
     me = ev.to_mesh()
     me.calc_loop_triangles()
     uvl = me.uv_layers.active.data
-    cn = me.corner_normals
-    gname = {g.index: g.name for g in ob.vertex_groups}
     out = list(head) + ['triangles']
     ntri = 0
     for lt in me.loop_triangles:
-        out.append(mats[lt.material_index])
-        for li in lt.loops:
-            v = me.vertices[me.loops[li].vertex_index]
-            links = [(int(gname[g.group]), g.weight) for g in v.groups if gname[g.group] != '__dec' and g.weight > 0.001]
-            links.sort(key=lambda x: -x[1])
-            links = links[:3] or [(0, 1.0)]
-            tot = sum(w for _, w in links)
-            n = cn[li].vector
-            uv = uvl[li].uv
-            out.append('  %d %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d %s' % (links[0][0], v.co.x, v.co.y, v.co.z, n.x, n.y, n.z,
-                uv.x, uv.y, len(links), ' '.join('%d %.6f' % (b, w / tot) for b, w in links)))
+        mat = mats[lt.material_index]
+        corners = [snap(lookup, mat, me.vertices[me.loops[li].vertex_index].co, uvl[li].uv) for li in lt.loops]
+        if len(set(corners)) < 3: continue
+        out.append(mat)
+        out += corners
         ntri += 1
     out += ['end', '']
     open(path, 'w', encoding='latin1').write('\n'.join(out))
@@ -103,8 +116,9 @@ ratios = [float(x) for x in args[0].split(',')]
 for path in args[1:]:
     head, tris = read_smd(path)
     ob, mats = build(os.path.basename(path), tris)
+    lookup = corner_lookup(tris)
     res = []
     for n, r in enumerate(ratios, 1):
-        res.append(write_smd(path[:-4] + '_lod%d.smd' % n, head, ob, mats, r))
+        res.append(write_smd(path[:-4] + '_lod%d.smd' % n, head, ob, mats, r, lookup))
     print('LOD %-28s %5d tris -> %s' % (os.path.basename(path), len(tris), ' / '.join(str(x) for x in res)))
     bpy.data.objects.remove(ob)

@@ -10,6 +10,46 @@ local rows = HZ.Virtual
 
 local sqrt, huge, random, floor, min, max = math.sqrt, math.huge, math.random, math.floor, math.min, math.max
 local band, rshift = bit.band, bit.rshift
+local SysTime, yield = SysTime, coroutine.yield
+
+local SLICE_BUDGET = 0.002
+local sliceEnd = 0
+local passes = {}
+
+local function Breathe()
+    if SysTime() < sliceEnd then return false end
+
+    yield()
+
+    return true
+end
+
+local function SlicedPass(name, interval, profile, run)
+    passes[name] = { interval = interval, profile = profile, run = run, nextAt = 0 }
+end
+
+hook.Add("Tick", "hordez_virtual_passes", function()
+    local now = CurTime()
+    for name, pass in pairs(passes) do
+        if not pass.co and now >= pass.nextAt then
+            pass.co = coroutine.create(pass.run)
+            pass.nextAt = now + pass.interval
+        end
+
+        if pass.co then
+            local t0 = SysTime()
+            sliceEnd = t0 + SLICE_BUDGET
+            local ok, err = coroutine.resume(pass.co)
+            if HZ.ProfOn then HZ.ProfAdd(pass.profile, SysTime() - t0) end
+            if not ok then
+                ErrorNoHalt("[hordez] " .. name .. " pass failed: " .. tostring(err) .. "\n")
+                pass.co = nil
+            elseif coroutine.status(pass.co) == "dead" then
+                pass.co = nil
+            end
+        end
+    end
+end)
 
 function HZ.VirtualOn()
     return CV.virt:GetBool()
@@ -335,6 +375,7 @@ function HZ.ClearVirtual()
 end
 
 local STEP, LEG_TIME = 260, 1.2
+local FAR_LEG_DIST, FAR_LEG_SCALE = 3000, 4
 local probe = Vector()
 
 local function NextLeg(group, now, x, y, z)
@@ -400,7 +441,8 @@ local function NextLeg(group, now, x, y, z)
     local dx, dy = group.gx - x, group.gy - y
     local dist = sqrt(dx * dx + dy * dy)
     local tx, ty, tz, extra = nil, nil, nil, 0
-    local STEP = max(40, min(STEP, group.speed * LEG_TIME))
+    local reach = min(max(sqrt(group.nearest or 0) / FAR_LEG_DIST, 1), FAR_LEG_SCALE)
+    local STEP = max(40, min(STEP, group.speed * LEG_TIME) * reach)
     if dist <= STEP then
         tx, ty, tz, extra = group.gx, group.gy, group.gz, group.gextra or 0
         if group.garea then group.area = group.garea end
@@ -648,7 +690,11 @@ local function CoverFor(eye, now)
 
     local groupRangeSqr = (COVER_RANGE + GROUP_RADIUS) * (COVER_RANGE + GROUP_RADIUS)
     for g = 1, #groupArr do
+        if Breathe() then now = CurTime() end
+
         local group = groupArr[g]
+        if not group then break end
+
         local gx, gy, gz = PosAt(group, now)
         local gdx, gdy = gx - ex, gy - ey
         if gdx * gdx + gdy * gdy <= groupRangeSqr then
@@ -663,6 +709,8 @@ local function CoverFor(eye, now)
     for i = 0, COVER_CELLS - 1 do coverCells[i] = 0 end
 
     for k = 1, count do
+        if k % 64 == 0 then Breathe() end
+
         local i = coverOrder[k]
         local dist = coverDist[i]
         local cover = 0
@@ -701,7 +749,9 @@ local function CoverPass()
     local now = CurTime()
     coverPassId = coverPassId + 1
     local plys = player.GetAll()
-    for i = 1, #plys do CoverFor(plys[i]:EyePos(), now) end
+    for i = 1, #plys do
+        if IsValid(plys[i]) then CoverFor(plys[i]:EyePos(), CurTime()) end
+    end
 
     local n = #coverActive
     for i = n, 1, -1 do
@@ -725,13 +775,11 @@ local function CoverScale(ref)
     return factor * factor
 end
 
-timer.Create("hordez_virtual_cover", 1, 0, function()
+SlicedPass("cover", 1, "sv_vcover", function()
     if not HZ.VirtualOn() or HZ.AIDisabled() then return end
     if HZ.VCount == 0 and HZ.Count <= CV.real_max:GetInt() then return end
 
-    local t0 = HZ.ProfOn and SysTime()
     CoverPass()
-    if t0 then HZ.ProfAdd("sv_vcover", SysTime() - t0) end
 end)
 
 local PROMOTE_PER_PASS = 2
@@ -781,7 +829,7 @@ local function TradePlaces(count, targets, targetCount, cap)
     end
 end
 
-timer.Create("hordez_virtual", 0.25, 0, function()
+SlicedPass("walk", 0.25, "sv_virtual", function()
     if HZ.VCount == 0 then
         if #pendDel > 0 or #pendGroupDel > 0 then FlushNet() end
         return
@@ -789,7 +837,6 @@ timer.Create("hordez_virtual", 0.25, 0, function()
 
     if HZ.AIDisabled() then return end
 
-    local t0 = HZ.ProfOn and SysTime()
     local now = CurTime()
     local targets, targetCount = ViewerList()
     local near = CV.virt_near:GetFloat()
@@ -800,10 +847,12 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     local waitCount = 0
 
     for g = #groupArr, 1, -1 do
+        if Breathe() then now, real = CurTime(), HZ.Count end
+
         local group = groupArr[g]
-        if group.count > 0 then
+        if group and group.count > 0 then
             local gx, gy, gz = PosAt(group, now)
-            group._x, group._y, group._z = gx, gy, gz
+            group._x, group._y, group._z, group._at = gx, gy, gz, now
             local groupBest = huge
             for i = 1, targetCount do
                 local viewer = targets[i]
@@ -854,15 +903,21 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     if waitCount > 0 and targetCount > 0 then TradePlaces(waitCount, targets, targetCount, cap) end
 
     for g = #groupArr, 1, -1 do
+        if Breathe() then
+            now = CurTime()
+            FlushNet()
+        end
+
         local group = groupArr[g]
-        if group.count > 0 then
+        if group and group.count > 0 then
             local x, y, z
-            if group._x then
+            if group._x and group._at == now then
                 x, y, z = group._x, group._y, group._z
-                group._x = nil
             else
                 x, y, z = PosAt(group, now)
             end
+
+            group._x = nil
             local cover, nearest = group.cover, group.nearest or huge
             if not cover or cover == huge then cover = 0 end
             local stop = max((300 + (group.id % 16) * 25) / (1 + cover), 90)
@@ -883,7 +938,6 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     end
 
     FlushNet()
-    if t0 then HZ.ProfAdd("sv_virtual", SysTime() - t0) end
 end)
 
 local DEMOTE_PER_PASS = 30

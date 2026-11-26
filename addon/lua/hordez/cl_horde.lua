@@ -126,12 +126,33 @@ local deathDist = CreateClientConVar("hz_death_anim_dist", "1500", true, false, 
 
 local deathMax = CreateClientConVar("hz_death_anim_max", "10", true, false, "Max death animations at once")
 
+local sourceBones = {}
+
+local function SourceBones(rag, mdl, src, ragBones)
+    local srcModel = src:GetModel()
+    if srcModel == mdl then return ragBones end
+
+    local key = mdl .. "|" .. srcModel
+    local list = sourceBones[key]
+    if list then return list end
+
+    list = {}
+    for i, bone in ipairs(ragBones) do
+        local name = bone >= 0 and rag:GetBoneName(bone)
+        list[i] = name and src:LookupBone(name) or -1
+    end
+
+    sourceBones[key] = list
+
+    return list
+end
+
 local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
     local t0 = HZ.ProfOn and SysTime()
     local rag, pooled = AcquireRagdoll(mdl)
     if not IsValid(rag) then return end
 
-    local ragBones = CachePhysBones(rag, mdl)
+    local ragBones = SourceBones(rag, mdl, src, CachePhysBones(rag, mdl))
 
     rag:SetSkin(skin)
     rag:SetColor(src:GetColor())
@@ -626,12 +647,14 @@ net.Receive("hz_rag", function()
     local groups = {}
     for i = 0, ent:GetNumBodyGroups() - 1 do groups[i] = ent:GetBodygroup(i) end
     local body
-    if StartDeath(ent, kind, dir, groups, vel) then
+    local custom = ent.hz_custom
+    if not custom and StartDeath(ent, kind, dir, groups, vel) then
         body = dying[#dying].csm
     else
         local push = force * 0.012
         if push:Length() > 600 then push = push:GetNormalized() * 600 end
-        body = MakeRagdoll(ent, ent:GetModel(), ent:GetSkin(), groups, vel, push)
+        body = MakeRagdoll(ent, custom or ent:GetModel(), custom and 0 or ent:GetSkin(), custom and {} or groups, vel,
+            push)
     end
 
     if onFire and IsValid(body) then HZ.StartBurn(body) end

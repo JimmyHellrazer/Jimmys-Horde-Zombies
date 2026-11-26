@@ -903,6 +903,7 @@ function HZ.SpawnZombie(pos, yaw, opts)
     if not IsValid(zombie) then return nil end
 
     zombie.hz_model = opts.model
+    zombie.hz_custom = opts.custom
     zombie.hz_idleType = opts.idle or "random"
     zombie.hz_startAlerted = opts.alerted
     zombie.hz_owner = opts.owner

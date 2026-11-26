@@ -14,6 +14,12 @@ if CLIENT then
 
     function ENT:Initialize()
         HZ.ClientRegister(self)
+
+        local custom = self:GetNW2String("hz_custom", "")
+        self.hz_custom = custom ~= "" and custom or nil
+        self:SetNW2VarProxy("hz_custom", function(ent, _, _, new)
+            ent.hz_custom = new ~= "" and new or nil
+        end)
     end
 
     local band = bit.band
@@ -35,7 +41,12 @@ if CLIENT then
         end
 
         local t0 = HZ.ProfOn and SysTime()
-        self:DrawModel(flags)
+        if self.hz_custom then
+            HZ.DrawCustom(self, self.hz_custom, flags)
+        else
+            self:DrawModel(flags)
+        end
+
         if t0 then HZ.ProfAdd("cl_draw", SysTime() - t0) end
     end
 
@@ -101,6 +112,8 @@ end
 
 function ENT:Initialize()
     self:SetModel(self.hz_model or HZ.RandomModel())
+    if self.hz_custom == nil then self.hz_custom = HZ.PickCustomModel() end
+    if self.hz_custom then self:SetNW2String("hz_custom", self.hz_custom) end
     self.hz_female = self:GetModel():find("female", 1, true) ~= nil
     local skins = self:SkinCount()
     if skins and skins > 1 then self:SetSkin(math.random(0, skins - 1)) end

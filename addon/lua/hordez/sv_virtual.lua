@@ -276,6 +276,7 @@ function HZ.AddVirtual(pos, opts)
 
     local row = { id = id, shambler = shambler and true or false, model = model, speed = speed,
         female = model:find("female", 1, true) ~= nil, hp = opts.hp or 1, born = CurTime(), hz_cover = opts.cover,
+        custom = opts.custom,
         owner = IsValid(opts.owner) and opts.owner or nil, horde = opts.horde and true or nil, omni = opts.omni,
         maxHp = opts.maxHp }
 
@@ -487,7 +488,8 @@ local function PromoteRow(row, x, y, z)
     local yaw = math.deg(math.atan2(group.wy - group.y, group.wx - group.x))
     local owner = IsValid(row.owner) and row.owner or nil
     local ent = HZ.SpawnZombie(Vector(x, y, z + 4), yaw,
-        { alerted = true, shambler = row.shambler, model = row.model, force = true, owner = owner })
+        { alerted = true, shambler = row.shambler, model = row.model, custom = row.custom, force = true,
+            owner = owner })
 
     if not IsValid(ent) then return nil end
 
@@ -530,7 +532,8 @@ local function DemoteZombie(zombie, pos)
         or false,
         speed = zombie.hz_shambler and zombie.hz_shamSpeed or CV.runspeed:GetFloat() * (zombie.hz_speedMul or 1),
         hp = math.Clamp(zombie:Health() / max(zombie:GetMaxHealth(), 1), 0.05, 1), cover = zombie.hz_cover,
-        owner = zombie.hz_owner, horde = zombie.hz_horde, omni = zombie.hz_omni, maxHp = zombie:GetMaxHealth() })
+        owner = zombie.hz_owner, horde = zombie.hz_horde, omni = zombie.hz_omni, maxHp = zombie:GetMaxHealth(),
+        custom = zombie.hz_custom })
 
     if not row then return false end
 

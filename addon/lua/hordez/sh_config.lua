@@ -49,6 +49,7 @@ HZ.CV = {
     horde_count = MakeConVar("hz_horde_count", "12", "Infected Horde size"),
     horde_alert = MakeConVar("hz_horde_alerted", "0", "Infected Horde spawns chasing"),
     accessory   = MakeConVar("hz_accessory_chance", "0.2", "Accessory chance"),
+    custom_share = MakeConVar("hz_custom_share", "1", "Share of zombies wearing custom models"),
     burn_time   = MakeConVar("hz_burn_time", "5", "Burn time (s)"),
     npc_hostile = MakeConVar("hz_npc_hostile", "1", "NPCs fight back"),
     arc         = MakeConVar("hz_melee_arc", "1", "Hits and shoves sweep an arc"),

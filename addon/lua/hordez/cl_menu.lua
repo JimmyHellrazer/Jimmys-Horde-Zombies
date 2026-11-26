@@ -165,7 +165,63 @@ local function ClientPanel(panel)
     end)
 end
 
+local ICON_SIZE = 64
+
+local function ModelIcon(grid, path, name)
+    local icon = grid:Add("SpawnIcon")
+    icon:SetModel(path)
+    icon:SetSize(ICON_SIZE, ICON_SIZE)
+    icon:SetTooltip(name or path)
+    icon.DoClick = function()
+        HZ.ToggleCustomModel(path)
+    end
+
+    icon.PaintOver = function(_, w, h)
+        if not HZ.CustomModelSet[path] then return end
+
+        surface.SetDrawColor(90, 210, 90, 255)
+        surface.DrawOutlinedRect(0, 0, w, h, 3)
+    end
+end
+
+local function ModelsPanel(panel)
+    panel:ClearControls()
+    panel:Help("Zombies wear the selected models. Only the host or a superadmin can change them")
+    panel:NumSlider("Share of zombies", "hz_custom_share", 0, 1, 2)
+
+    local entry = panel:TextEntry("Model path")
+    panel:Button("Add path").DoClick = function()
+        local path = string.lower(string.Trim(entry:GetValue()))
+        if path ~= "" and not HZ.CustomModelSet[path] then HZ.ToggleCustomModel(path) end
+    end
+
+    panel:Button("Clear selection").DoClick = function()
+        HZ.SendCustomModels({})
+    end
+
+    local scroll = vgui.Create("DScrollPanel", panel)
+    scroll:SetTall(480)
+    local grid = vgui.Create("DIconLayout", scroll)
+    grid:Dock(FILL)
+    grid:SetSpaceX(2)
+    grid:SetSpaceY(2)
+
+    local listed = {}
+    for name, path in SortedPairs(player_manager.AllValidModels()) do
+        path = string.lower(path)
+        listed[path] = true
+        ModelIcon(grid, path, name)
+    end
+
+    for _, path in ipairs(HZ.CustomModels) do
+        if not listed[path] then ModelIcon(grid, path) end
+    end
+
+    panel:AddItem(scroll)
+end
+
 hook.Add("PopulateToolMenu", "hordez_menu", function()
+    spawnmenu.AddToolMenuOption("Options", CATEGORY, "hordez_models", "Models", "", "", ModelsPanel)
     spawnmenu.AddToolMenuOption("Options", CATEGORY, "hordez_server", "Server", "", "", ServerPanel)
     spawnmenu.AddToolMenuOption("Options", CATEGORY, "hordez_client", "Client", "", "", ClientPanel)
 end)

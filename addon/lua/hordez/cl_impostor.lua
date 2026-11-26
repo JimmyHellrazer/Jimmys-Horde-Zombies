@@ -61,6 +61,28 @@ local ready = false
 local fromCache = false
 local bakeAt
 local bakeModels
+local bakeSignature, bakedSignature
+local bakeDoneAt = 0
+
+local function CustomShare()
+    local share = GetConVar("hz_custom_share")
+
+    return share and math.Round(math.Clamp(share:GetFloat(), 0, 1), 1) or 1
+end
+
+local function ModelSignature()
+    local list = HZ.CustomModels or {}
+    if #list == 0 then return "stock" end
+
+    return CustomShare() .. "|" .. table.concat(list, "|")
+end
+
+local function CustomFor(variantIndex)
+    local list = HZ.CustomModels or {}
+    if #list == 0 or (variantIndex * 0.618034) % 1 >= CustomShare() then return nil end
+
+    return list[(variantIndex * 7) % #list + 1]
+end
 
 local function SaveCache()
     file.CreateDir("hordez")
@@ -74,7 +96,7 @@ local function SaveCache()
 
     local savedRates = {}
     for i = 0, #VARIANTS - 1 do savedRates[i + 1] = rates[i] or 1 end
-    file.Write(CACHE_META, util.TableToJSON({ version = CACHE_VER, rates = savedRates }))
+    file.Write(CACHE_META, util.TableToJSON({ version = CACHE_VER, rates = savedRates, models = bakeSignature }))
 
     return true
 end
@@ -86,6 +108,9 @@ local function LoadCache()
     if not istable(meta) or meta.version ~= CACHE_VER or not istable(meta.rates) or #meta.rates < #VARIANTS then
         return false
     end
+
+    local signature = ModelSignature()
+    if (meta.models or "stock") ~= signature then return false end
 
     local loaded = {}
     for i, layer in ipairs(LAYERS) do
@@ -103,14 +128,14 @@ local function LoadCache()
     for i = 0, #VARIANTS - 1 do rates[i] = tonumber(meta.rates[i + 1]) or 1 end
     for i, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", loaded[i]) end
     dbgMat:SetTexture("$basetexture", loaded[2])
-    ready, fromCache = true, true
+    ready, fromCache, bakedSignature = true, true, signature
 
     return true
 end
 
 local ACCESSORY = { beanie = true, beanies = true, glasses = true }
 
-local function StandIn(variant)
+local function StandIn(variant, variantIndex)
     local pool = {}
     for _, model in ipairs(HZ.Models) do
         local female = model:find("female", 1, true) ~= nil
@@ -147,14 +172,22 @@ local function StandIn(variant)
 
     ent:SetLOD(1)
     local dur = ent:SequenceDuration(seq)
+    local custom = CustomFor(variantIndex)
+    local overlay = custom and ClientsideModel(custom, RENDERGROUP_OPAQUE)
+    if IsValid(overlay) then
+        overlay:SetNoDraw(true)
+        overlay:SetParent(ent)
+        overlay:AddEffects(EF_BONEMERGE)
+    end
 
-    return ent, 1 / math.max(dur and dur > 0 and dur or 1, 0.2)
+    return ent, 1 / math.max(dur and dur > 0 and dur or 1, 0.2), IsValid(overlay) and overlay or nil
 end
 
 local function StartBake()
     if not SHADER_OK then return end
 
     ready, fromCache, bakeAt = false, false, 1
+    bakeSignature = ModelSignature()
     for _, model in ipairs(bakeModels or {}) do
         if IsValid(model) then model:Remove() end
     end
@@ -168,10 +201,12 @@ local camView = { type = "3D",
 
 local function BakeVariant(i)
     local variant = VARIANTS[i]
-    local standIn, rate = StandIn(variant)
+    local standIn, rate, overlay = StandIn(variant, i)
     if not standIn then return end
 
     bakeModels[#bakeModels + 1] = standIn
+    bakeModels[#bakeModels + 1] = overlay
+    local drawn = overlay or standIn
     rates[i - 1] = rate
     local at = EyePos()
     for _, ent in ipairs(HZ.ClientZombies) do
@@ -204,6 +239,11 @@ local function BakeVariant(i)
             standIn:SetCycle(frame / 8)
             standIn:InvalidateBoneCache()
             standIn:SetupBones()
+            if overlay then
+                overlay:InvalidateBoneCache()
+                overlay:SetupBones()
+            end
+
             for view = 0, 7 do
                 local ang = math.rad(view * 45)
                 camView.origin = center + Vector(math.cos(ang), math.sin(ang), 0) * 300
@@ -212,7 +252,7 @@ local function BakeVariant(i)
                 camView.y = ((i - 1) * 2 + (view >= 4 and 1 or 0)) * layer.cellH
                 cam.Start(camView)
                 render.FogMode(MATERIAL_FOG_NONE)
-                standIn:DrawModel()
+                drawn:DrawModel()
                 cam.End3D()
             end
         end
@@ -245,7 +285,32 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
         dbgMat:SetTexture("$basetexture", nearLayer.rt)
         local ok, saved = pcall(SaveCache)
         if not (ok and saved and LoadCache()) then ready = true end
+        bakedSignature = bakeSignature
+        bakeDoneAt = RealTime()
     end
+end)
+
+timer.Create("hordez_impostor_models", 1, 0, function()
+    if not bakedSignature or bakeAt or not cvOn:GetBool() or ModelSignature() == bakedSignature then return end
+    if not LoadCache() then StartBake() end
+end)
+
+local NOTICE_W, NOTICE_H, NOTICE_TIME = 260, 44, 1.5
+
+hook.Add("HUDPaint", "hordez_impostor_bake", function()
+    local done = RealTime() - bakeDoneAt < NOTICE_TIME
+    if not bakeAt and not done then return end
+
+    local x, y = (ScrW() - NOTICE_W) * 0.5, 48
+    local progress = bakeAt and (bakeAt - 1) / #VARIANTS or 1
+    draw.RoundedBox(6, x, y, NOTICE_W, NOTICE_H, Color(0, 0, 0, 190))
+    draw.SimpleText(bakeAt and "Baking zombie impostors" or "Zombie impostors updated", "DermaDefaultBold",
+        x + NOTICE_W * 0.5, y + 14, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+
+    surface.SetDrawColor(255, 255, 255, 40)
+    surface.DrawRect(x + 12, y + 28, NOTICE_W - 24, 6)
+    surface.SetDrawColor(90, 210, 90, 255)
+    surface.DrawRect(x + 12, y + 28, (NOTICE_W - 24) * progress, 6)
 end)
 
 function HZ.BakeImpostors()

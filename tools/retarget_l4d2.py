@@ -1,50 +1,23 @@
-r"""Retarget L4D2 common-infected animations onto the infected_citizens (HL2 ValveBiped) skeleton
-and write a compile-ready animation-library QC for each.
-
-    python retarget_l4d2.py [--set male|female|both]
-
-Input:  Crowbar decompile in K:\jimmyproject\l4d2_rip\models\infected\steven!\ (anim_common*.qc + *_anims\*.smd)
-Output: K:\jimmyproject\hordez\build\<set>\  (anim_infected_<m|f>.qc + anims\*.smd)
-
-Method (both rigs are ValveBiped with identical bone axis conventions):
-- every bone keeps the L4D2 local ROTATION per frame;
-- every non-root bone takes the citizen's rest TRANSLATION (so limbs keep citizen proportions);
-- the pelvis (root) translation is scaled by citizen leg length / L4D2 leg length, so root motion
-  and hip height match and feet don't slide.
-- $definebone uses the citizen rest pose (rest values = what the engine falls back to for omitted data).
-QC changes: new $modelname, no hitboxes / physics / materials (the citizen model owns those),
-no AE_CL_PLAYSOUND events (L4D2 sound names don't exist in GMod).
-Citizen extra bones (finger 2nd/3rd joints, ulna/bicep helpers) are not in the library, so they stay at rest.
-"""
 import argparse, math, os, re, sys
 
-sys.path.insert(0, r"K:\jimmyproject\codport\tools")
-sys.path.insert(0, r"K:\jimmyproject\codport")
-from mdl_decompile import Mdl  # noqa: E402
-
-SRC = r"K:\jimmyproject\l4d2_rip\models\infected\steven!"
-CIT = r"K:\SteamLibrary\steamapps\common\GarrysMod\garrysmod\addons\infected_citizens_129669178\models\bloocobalt\citizens"
-OUT = r"K:\jimmyproject\hordez\build"
+SRC = CIT = OUT = REFS = None
+Mdl = None
 
 SETS = {
-    "male": dict(qc="anim_common.qc", cit="male_01.mdl", name="hordez/inf_m.mdl",
-                 ref=r"K:\jimmyproject\l4d2_rip\models\infected\anim_common.mdl"),
+    "male": dict(qc="anim_common.qc", cit="male_01.mdl", name="hordez/inf_m.mdl", ref="anim_common.mdl"),
     "female": dict(qc="anim_common_female.qc", cit="female_01.mdl", name="hordez/inf_f.mdl",
-                   ref=r"K:\jimmyproject\l4d2_rip\models\infected\anim_common_female.mdl"),
+                   ref="anim_common_female.mdl"),
 }
 ROOT = "ValveBiped.Bip01_Pelvis"
 
-# Romero shamblers (L4D2 workshop mod "George Romero Dead Mode", UndeadTabaco / Cidadao_de_Mal): its
-# "xdreanims" slot models override sequences by name. They are imported into the same libraries under a
-# "Romero_" prefix (no new citizen copies needed). First slot listed wins for duplicate names, as in-game.
 ROMERO_DIR = r"K:\romero\models\xdreanims\ANIMS"
 ROMERO = {
     "male": ["ci_male_slot_003.qc", "ci_male_slot_008.qc", "ci_male_slot_027.qc"],
     "female": ["ci_female_slot_003.qc", "ci_female_slot_027.qc"],
 }
 ROMERO_PREFIX = "Romero_"
-ROMERO_SKIP = re.compile(r"aim_matrix", re.I)   # upper-body aim layers: not used by the NextBot
-LEG = ["ValveBiped.Bip01_L_Calf", "ValveBiped.Bip01_L_Foot"]   # thigh->calf, calf->foot lengths
+ROMERO_SKIP = re.compile(r"aim_matrix", re.I)
+LEG = ["ValveBiped.Bip01_L_Calf", "ValveBiped.Bip01_L_Foot"]
 
 
 def leg_len(mdl):
@@ -53,7 +26,6 @@ def leg_len(mdl):
 
 
 def is_delta(lines):
-    """True when every non-root bone in the first frame has a (near) zero position."""
     seen, nonzero, in_skel, frame = 0, 0, False, 0
     for ln in lines:
         s = ln.strip()
@@ -75,13 +47,10 @@ def is_delta(lines):
         seen += 1
         if abs(float(p[1])) + abs(float(p[2])) + abs(float(p[3])) > 0.01:
             nonzero += 1
-    # tolerant: some L4D2 deltas keep a small offset on one bone (female Melee_Moving01_Delta: Spine 0.5u),
-    # which made the strict test miss them and doubled the spine on female attacks (2026-11-23)
     return seen > 0 and nonzero <= max(1, seen // 10)
 
 
 def qc_delta_files(qc_lines):
-    """SMD file names used by $sequence/$animation blocks marked delta (authoritative, from the source QC)."""
     out, block, files, depth = set(), None, [], 0
     for ln in qc_lines:
         s = ln.strip()
@@ -99,13 +68,9 @@ def qc_delta_files(qc_lines):
 
 
 def retarget_smd(src, dst, rest, scale, force_delta=False):
-    """rest: name -> (x,y,z) citizen local pos. Rewrites positions, keeps rotations."""
     names, out, mode = {}, [], None
     with open(src) as f:
         lines = f.read().splitlines()
-    # Delta animations (aim matrices, leans, layers, correctives) store per-bone OFFSETS: their non-root
-    # positions are ~0. Writing rest positions into them made every layered sequence add a second copy
-    # of each bone offset (stretched "expanding" zombies, 2026-11-22). Leave their positions alone.
     delta = force_delta or is_delta(lines)
     for ln in lines:
         s = ln.strip()
@@ -139,7 +104,6 @@ def retarget_smd(src, dst, rest, scale, force_delta=False):
 
 
 def definebone_line(b, parent_name):
-    # $definebone angles are (rot.y, rot.z, rot.x) in degrees (checked against Crowbar output)
     x, y, z = b["pos"]
     rx, ry, rz = (math.degrees(a) for a in b["rot"])
     return (f'$definebone "{b["name"]}" "{parent_name}" {x:.6f} {y:.6f} {z:.6f} '
@@ -147,7 +111,6 @@ def definebone_line(b, parent_name):
 
 
 def qc_blocks(lines):
-    """Top-level $animation / $sequence / $weightlist blocks: [(kind, name, [lines])]."""
     out, i = [], 0
     while i < len(lines):
         s = lines[i].strip()
@@ -170,7 +133,6 @@ def qc_blocks(lines):
 
 
 def romero_import(setname, outdir, rest, scale):
-    """Retarget the Romero slot animations and return QC lines defining them with the Romero_ prefix."""
     taken, picked = set(), []
     for qcname in ROMERO.get(setname, []):
         qcp = os.path.join(ROMERO_DIR, qcname)
@@ -193,7 +155,7 @@ def romero_import(setname, outdir, rest, scale):
                 continue
             refs = re.findall(r'"([^"]*)"', ln)
             if any(ROMERO_SKIP.search(r) for r in refs):
-                continue   # a layer / weightlist of the skipped aim matrix
+                continue
             for r in set(refs):
                 if r in taken:
                     ln = ln.replace('"%s"' % r, '"%s"' % rn(r))
@@ -212,7 +174,7 @@ def romero_import(setname, outdir, rest, scale):
 def build(setname):
     cfg = SETS[setname]
     cit = Mdl(os.path.join(CIT, cfg["cit"]))
-    src_mdl = Mdl(cfg["ref"])
+    src_mdl = Mdl(os.path.join(REFS, cfg["ref"]))
     scale = leg_len(cit) / leg_len(src_mdl)
     cb = {b["name"]: b for b in cit.bones}
     rest = {n: tuple(b["pos"]) for n, b in cb.items() if n != ROOT}
@@ -245,7 +207,6 @@ def build(setname):
         if "AE_CL_PLAYSOUND" in s:
             continue
         q.append(ln.replace(animdir + "\\", "anims\\"))
-    # collisionjoints opens with a line of its own before '{'
     os.makedirs(outdir, exist_ok=True)
     q += romero_import(setname, outdir, rest, scale)
     qc_out = os.path.join(outdir, os.path.basename(cfg["name"])[:-4] + ".qc")
@@ -267,8 +228,16 @@ def build(setname):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Retarget the L4D2 common infected animations onto the citizen rig")
+    ap.add_argument("source", help="Crowbar decompile of the L4D2 infected animations (anim_common*.qc)")
+    ap.add_argument("citizens", help="models/bloocobalt/citizens folder of infected_citizens")
+    ap.add_argument("refs", help="folder with L4D2's anim_common.mdl and anim_common_female.mdl")
+    ap.add_argument("out", help="output folder")
+    ap.add_argument("--lib", action="append", default=[], help="folder containing mdl_decompile.py")
     ap.add_argument("--set", default="both", choices=["male", "female", "both"])
     a = ap.parse_args()
+    sys.path[:0] = a.lib
+    from mdl_decompile import Mdl
+    SRC, CIT, REFS, OUT = a.source, a.citizens, a.refs, a.out
     for s in (["male", "female"] if a.set == "both" else [a.set]):
         build(s)

@@ -1,19 +1,8 @@
-r"""Turn a clean (uninfected) facemap into one matching the infected set of the same face.
-
-    python infect_face.py <facemaps dir> sandro vance
-
-infected_citizens ships each face as 4 infected variants, but sandro_facemap5 (male_06) and vance_facemap5
-(male_08) are leftover clean HL2 faces. This re-grades <who>_facemap5 to the tone of <who>_facemap..4:
-Reinhard colour transfer in CIELAB (per-channel mean / std) measured on skin only: blood splatter and dark
-hair are masked out of the stats, so the skin lands on the infected set's grey dead skin. The result is written as an uncompressed BGR888
-VTF 7.2 with a full mip chain; the original is kept as <who>_facemap5_clean.vtf.
-"""
 import os, struct, sys
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, r"K:\TEMP\claude\3dd0f04fe75ceb61\12964a7a-c0cc-4926-984d-c8602ad3a63e\scratchpad")
-from vtf2png import load  # noqa: E402  (VTF top mip -> PIL image)
+load = None
 
 
 def srgb_to_lab(rgb):
@@ -49,12 +38,12 @@ def write_vtf(path, img, refl):
     struct.pack_into("<4sIIIHHIHH", hdr, 0, b"VTF\0", 7, 2, 80, w, h, 0, 1, 0)
     struct.pack_into("<3f", hdr, 32, *refl)
     struct.pack_into("<f", hdr, 48, 1.0)
-    struct.pack_into("<i", hdr, 52, 3)                 # IMAGE_FORMAT_BGR888
+    struct.pack_into("<i", hdr, 52, 3)
     hdr[56] = len(mips)
-    struct.pack_into("<i", hdr, 57, -1)                # no low-res thumbnail
+    struct.pack_into("<i", hdr, 57, -1)
     hdr[61], hdr[62] = 0, 0
-    struct.pack_into("<H", hdr, 63, 1)                 # depth
-    data = b"".join(mm.convert("RGB").tobytes("raw", "BGR") for mm in reversed(mips))   # smallest first
+    struct.pack_into("<H", hdr, 63, 1)
+    data = b"".join(mm.convert("RGB").tobytes("raw", "BGR") for mm in reversed(mips))
     with open(path, "wb") as f:
         f.write(bytes(hdr) + data)
 
@@ -64,15 +53,14 @@ def infect(faces, who):
     keep = os.path.join(faces, who + "_facemap5_clean.vtf")
     if not os.path.exists(keep):
         os.replace(src_path, keep)
-    src = np.asarray(load(keep)[0], dtype=np.float64)   # always from the kept clean original
+    src = np.asarray(load(keep)[0], dtype=np.float64)
     tgt = []
     for v in ("", "2", "3", "4"):
         px = np.asarray(load(os.path.join(faces, who + "_facemap" + v + ".vtf"))[0], dtype=np.float64).reshape(-1, 3)
         r, g = px[:, 0], px[:, 1]
-        tgt.append(px[~((r > 60) & (r > g * 1.6))])        # drop blood
+        tgt.append(px[~((r > 60) & (r > g * 1.6))])
     tgt = np.concatenate(tgt)
     sl, tl = srgb_to_lab(src), srgb_to_lab(tgt)
-    # skin only on both sides (hair is a big dark chunk of every facemap and would drag the grade darker)
     s_skin = sl.reshape(-1, 3)
     s_skin = s_skin[s_skin[:, 0] > 45]
     t_skin = tl[tl[:, 0] > 38]
@@ -87,5 +75,13 @@ def infect(faces, who):
 
 
 if __name__ == "__main__":
-    for who in sys.argv[2:]:
-        infect(sys.argv[1], who)
+    import argparse
+    ap = argparse.ArgumentParser(description="Re-grade a clean facemap to match the infected faces")
+    ap.add_argument("faces", help="materials/models/bloocobalt/citizens/facemaps folder")
+    ap.add_argument("names", nargs="+", help="face names, e.g. sandro vance")
+    ap.add_argument("--lib", action="append", default=[], help="folder containing vtf2png.py")
+    a = ap.parse_args()
+    sys.path[:0] = a.lib
+    from vtf2png import load
+    for who in a.names:
+        infect(a.faces, who)

@@ -16,13 +16,6 @@ local sqrt = math.sqrt
 local cvDebug = GetConVar("hz_debug")
 local boneMat, boneMatB = Matrix(), Matrix()
 
-local function ClearFlex(ent)
-    local count = ent:GetFlexNum()
-    for i = 0, count - 1 do
-        if ent:GetFlexWeight(i) > 0.01 then ent:SetFlexWeight(i, 0) end
-    end
-end
-
 local function CachePhysBones(rag, mdl)
     local ragBones = physBones[mdl]
     if ragBones then return ragBones end
@@ -51,7 +44,6 @@ local function ParkRagdoll(rag)
     rag:SetNoDraw(true)
     rag:DrawShadow(false)
     rag:DestroyShadow()
-    ClearFlex(rag)
     for i = 0, rag:GetPhysicsObjectCount() - 1 do
         local phys = rag:GetPhysicsObjectNum(i)
         if IsValid(phys) then
@@ -136,16 +128,6 @@ local deathDist = CreateClientConVar("hz_death_anim_dist", "1500", true, false,
 
 local deathMax = CreateClientConVar("hz_death_anim_max", "10", true, false, "Max death animations playing at once")
 
-local function CopyFlex(from, to)
-    if not (IsValid(from) and IsValid(to)) then return end
-
-    local count = from:GetFlexNum()
-    for i = 0, count - 1 do
-        local weight = from:GetFlexWeight(i)
-        if weight > 0.01 then to:SetFlexWeight(i, weight) end
-    end
-end
-
 local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
     local t0 = HZ.ProfOn and SysTime()
     local rag, pooled = AcquireRagdoll(mdl)
@@ -155,7 +137,6 @@ local function MakeRagdoll(src, mdl, skin, groups, baseVel, push, vels)
 
     rag:SetSkin(skin)
     rag:SetColor(src:GetColor())
-    CopyFlex(src, rag)
     for i, value in pairs(groups) do rag:SetBodygroup(i, value) end
     rag:SetPos(src:GetPos())
     rag:SetAngles(src:GetAngles())
@@ -283,7 +264,6 @@ local function ReleaseDeathModel(csm, mdl, kicks)
         csm:SetNoDraw(true)
         csm:DrawShadow(false)
         csm:DestroyShadow()
-        ClearFlex(csm)
         local bucket = csmPool[mdl]
         if not bucket then
             bucket = {}
@@ -426,7 +406,6 @@ local function StartDeath(ent, kind, dir, groups, vel)
 
     deathModel:SetSkin(ent:GetSkin())
     deathModel:SetColor(ent:GetColor())
-    CopyFlex(ent, deathModel)
     for i, value in pairs(groups) do deathModel:SetBodygroup(i, value) end
     deathModel:SetPos(ent:GetPos())
     deathModel:SetAngles(Angle(0, ent:GetAngles().y, 0))

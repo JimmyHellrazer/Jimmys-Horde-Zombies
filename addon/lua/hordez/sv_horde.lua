@@ -673,19 +673,6 @@ for _, sounds in pairs(HZ.Snd) do
     end
 end
 
-local durCache = {}
-
-local function SoundLen(path)
-    local dur = durCache[path]
-    if not dur then
-        dur = SoundDuration(path)
-        dur = (dur and dur > 0) and dur or 1
-        durCache[path] = dur
-    end
-
-    return dur
-end
-
 local tokens, lastTok = 0, 0
 
 function HZ.Voice(zombie, kind, level, force)
@@ -712,7 +699,6 @@ function HZ.Voice(zombie, kind, level, force)
     zombie.hz_voiceUntil = now + (zombie.hz_shambler and 2.5 or 1.5)
     local pitch = zombie.hz_shambler and math.random(84, 94) or math.random(94, 106)
     zombie:EmitSound(path, level or 75, pitch, 1, CHAN_VOICE)
-    zombie:SetNW2Float("hz_yell", now + math.Clamp(SoundLen(path) * 100 / pitch, 0.3, 4))
 end
 
 HZ.ShamblerVoice = { rage = "idle", rageat = "idle", alert = "idle", becomealert = "idle", enraged = nil,

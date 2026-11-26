@@ -1,11 +1,3 @@
-"""Swap the zombie ragdoll physics for the stock HL2 citizen ones (models/humans/group01/*.phy).
-Run after patch_citizens.py. No recompile:
- * the .phy is copied and its checksum (header offset 12) set to the target .mdl's (offset 8),
-   otherwise the engine rejects it;
- * each bone's physicsbone index in the .mdl (mstudiobone_t + 172) is remapped to the new solid order
-   (own solid, else the nearest ancestor's), since the HL2 ragdoll has 15 solids vs the addon's 19.
-Originals backed up in phy_backup_infected_citizens.
-usage: swap_phy_hl2.py <hl2 group01 dir> <addon models/hordez/citizens dir>"""
 import os, re, struct, sys, glob
 
 def cstr(b, o):
@@ -23,12 +15,17 @@ def phy_solid_names(b):
         solids[re.search(r'"name"\s*"([^"]+)"', blk).group(1).lower()] = idx
     return solids
 
-src, dst = sys.argv[1], sys.argv[2]
+import argparse
+ap = argparse.ArgumentParser(description="Use the stock HL2 citizen ragdolls for the zombie models")
+ap.add_argument("hl2", help="folder with HL2's models/humans/group01 .phy files")
+ap.add_argument("models", help="addon models/hordez/citizens folder")
+a = ap.parse_args()
+src, dst = a.hl2, a.models
 for mdl in sorted(glob.glob(os.path.join(dst, '*.mdl'))):
     name = os.path.basename(mdl)[:-4]
     base = name.replace('_b', '')
     cand = os.path.join(src, base + '.phy')
-    if not os.path.exists(cand):    # e.g. male_10 has no HL2 counterpart
+    if not os.path.exists(cand):
         cand = os.path.join(src, ('female_01' if base.startswith('female') else 'male_01') + '.phy')
     m = bytearray(open(mdl, 'rb').read())
     ck = struct.unpack_from('<i', m, 8)[0]

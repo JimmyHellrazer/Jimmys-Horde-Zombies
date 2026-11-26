@@ -27,9 +27,9 @@ def full_path(name):
     for d in cdmaterials:
         rel = (d + '/' + name) if d else name
         if os.path.exists(os.path.join(MATERIALS, rel + '.vmt')): return rel
-    return name
+    return None
 
-face = [full_path(m) for m in materials if FACE.search(m)]
+face = [p for p in (full_path(m) for m in materials if FACE.search(m)) if p]
 body = [m for m in materials if not FACE.search(m)]
 
 def extend_skins(m):

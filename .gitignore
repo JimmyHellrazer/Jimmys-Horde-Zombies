@@ -1,4 +1,3 @@
-# backups and build leftovers
 *.bak
 *.bak[0-9]
 *~

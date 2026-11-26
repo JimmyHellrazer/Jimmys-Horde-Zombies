@@ -16,7 +16,7 @@ function HZ.VirtualOn()
 end
 
 local GROUP_MAX, GROUP_RADIUS = 24, 90
-local groups, openGroups = {}, {}
+local groups, groupArr, openGroups = {}, {}, {}
 local ownedCount, ownedHorde = {}, {}
 
 function HZ.VirtualOwned(owner)
@@ -180,6 +180,9 @@ local function NewGroup(pos, speed, shambler, area)
         speed = max(speed, 5), shambler = shambler, area = area, count = 0, rows = {}, _pendAdd = true }
 
     groups[id] = group
+    local gi = #groupArr + 1
+    groupArr[gi] = group
+    group._gi = gi
     openGroups[id] = group
     pendGroupAdd[#pendGroupAdd + 1] = group
 
@@ -265,6 +268,17 @@ local function DropGroup(group)
     if groups[group.id] ~= group then return end
 
     groups[group.id] = nil
+    local gi = group._gi
+    if gi then
+        local last = #groupArr
+        if gi ~= last then
+            local moved = groupArr[last]
+            groupArr[gi] = moved
+            moved._gi = gi
+        end
+        groupArr[last] = nil
+        group._gi = nil
+    end
     openGroups[group.id] = nil
     groupIds:Release(group.id)
     if group._pendMove then
@@ -633,7 +647,8 @@ local function CoverFor(eye, now)
     end
 
     local groupRangeSqr = (COVER_RANGE + GROUP_RADIUS) * (COVER_RANGE + GROUP_RADIUS)
-    for _, group in pairs(groups) do
+    for g = 1, #groupArr do
+        local group = groupArr[g]
         local gx, gy, gz = PosAt(group, now)
         local gdx, gdy = gx - ex, gy - ey
         if gdx * gdx + gdy * gdy <= groupRangeSqr then
@@ -784,7 +799,8 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     local real, promoted = HZ.Count, 0
     local waitCount = 0
 
-    for _, group in pairs(groups) do
+    for g = #groupArr, 1, -1 do
+        local group = groupArr[g]
         if group.count > 0 then
             local gx, gy, gz = PosAt(group, now)
             group._x, group._y, group._z = gx, gy, gz
@@ -837,7 +853,8 @@ timer.Create("hordez_virtual", 0.25, 0, function()
     for i = #waiting, waitCount + 1, -1 do waiting[i] = nil end
     if waitCount > 0 and targetCount > 0 then TradePlaces(waitCount, targets, targetCount, cap) end
 
-    for _, group in pairs(groups) do
+    for g = #groupArr, 1, -1 do
+        local group = groupArr[g]
         if group.count > 0 then
             local x, y, z
             if group._x then
@@ -980,7 +997,8 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
     local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
     local now = CurTime()
     local hit, hitT, hitX, hitY, hitZ
-    for _, group in pairs(groups) do
+    for g = 1, #groupArr do
+        local group = groupArr[g]
         local gx, gy, gz = PosAt(group, now)
         local gcx, gcy, gcz = gx - sx, gy - sy, gz + 40 - sz
         local gAlong = gcx * dx + gcy * dy + gcz * dz

@@ -19,6 +19,7 @@ end
 
 local DU, DV = 1 / 32, 1 / 16
 local NEAR_DIST = 1200
+local NEAR_DIST_SQR = NEAR_DIST * NEAR_DIST
 local HALF_W, Z_LO, Z_HI = 24, -8, 88
 local MAX_QUADS = 65000
 local REBUILD = 0.5
@@ -280,8 +281,8 @@ local lightAt = Vector()
 
 local ex, ey, bright = 0, 0, 127.5
 
-local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, dist, fade)
-    local target = (dist < NEAR_DIST and nearLayer or farLayer).buckets[bucket]
+local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx, female, shambler, distSqr, fade)
+    local target = (distSqr < NEAR_DIST_SQR and nearLayer or farLayer).buckets[bucket]
     local quads = target.quads
     local variant
     if not moving then
@@ -384,7 +385,7 @@ local function GatherBucket(bucket, now)
 
                 EmitQuad(bucket, ent, now, x, y, z, vx, vy, moving, moving and atan2(vy, vx)
                     or ent:GetAngles().y * (PI / 180),
-                    idx, female, shambler, dist, fade)
+                    idx, female, shambler, distSqr, fade)
 
                 count = count + 1
             end
@@ -403,8 +404,8 @@ local function GatherBucket(bucket, now)
             local x, y, z = posAt(row, now)
             local moving = now < group.t1
             local dx, dy, dz = x - ex, y - ey, z - ez
-            EmitQuad(bucket, row, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
-                group.yaw, id, row.female, row.shambler, sqrt(dx * dx + dy * dy + dz * dz), 1)
+            EmitQuad(bucket, group, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
+                group.yaw, id, row.female, row.shambler, dx * dx + dy * dy + dz * dz, 1)
 
             count = count + 1
         end

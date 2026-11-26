@@ -11,6 +11,8 @@ Flow.building = false
 local co_graph, co_solve
 local nextSolve = 0
 local solvedKey
+local nativeSolving, nativePendingEnts, nativePendingKey = false, nil, nil
+local nativeSrcFlat = {}
 local rshift = bit.rshift
 local SysTime = SysTime
 local sliceEnd = 0
@@ -25,6 +27,84 @@ local function Resume(co)
     sliceEnd = SysTime() + math.Clamp(HZ.CV.flow_build:GetFloat(), 1, 50) / 1000
 
     return coroutine.resume(co)
+end
+
+local function FreeNativeFlow()
+    if Flow.native and HZ.NativeLib and HZ.NativeLib.FlowFree then
+        HZ.NativeLib.FlowFree(Flow.native)
+    end
+
+    Flow.native = nil
+    Flow.nativeTargets = nil
+    nativeSolving = false
+    nativePendingEnts = nil
+    nativePendingKey = nil
+end
+
+local function BuildNativeFlow(graph)
+    FreeNativeFlow()
+    if not (HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib.FlowNew) then return end
+
+    local lib = HZ.NativeLib
+    local fg = lib.FlowNew()
+    local ids = graph.ids
+    local areas = graph.area
+    local centers = graph.center
+    for i = 1, #ids do
+        local id = ids[i]
+        local area = areas[id]
+        local c = centers[id]
+        local nw = area:GetCorner(0)
+        local ne = area:GetCorner(1)
+        local se = area:GetCorner(2)
+        local sw = area:GetCorner(3)
+        lib.FlowAddArea(fg, id, nw.x, nw.y, nw.z, ne.z, se.x, se.y, se.z, sw.z, c.x, c.y, c.z)
+        if i % 64 == 0 then Breathe() end
+    end
+
+    local inc = graph.inc
+    local costs = graph.cost
+    local climb = graph.climb
+    for i = 1, #ids do
+        local toId = ids[i]
+        local fromList = inc[toId]
+        local costList = costs[toId]
+        for k = 1, #fromList do
+            local fromId = fromList[k]
+            local isClimb = climb ~= nil and climb[fromId] ~= nil and climb[fromId][toId] ~= nil
+            lib.FlowAddEdge(fg, fromId, toId, costList[k], isClimb)
+        end
+
+        if i % 64 == 0 then Breathe() end
+    end
+
+    lib.FlowFinalize(fg)
+    Flow.native = fg
+    solvedKey = nil
+end
+
+local function BindNativeTables(fg, sourceEnts)
+    local lib = HZ.NativeLib
+    Flow.nativeTargets = sourceEnts
+    Flow.dist = setmetatable({}, {
+        __index = function(_, id)
+            return lib.FlowDist(fg, id)
+        end,
+    })
+
+    Flow.nxt = setmetatable({}, {
+        __index = function(_, id)
+            return lib.FlowNext(fg, id)
+        end,
+    })
+
+    Flow.tgt = setmetatable({}, {
+        __index = function(_, id)
+            local slot = lib.FlowTarget(fg, id)
+
+            return slot and sourceEnts[slot] or nil
+        end,
+    })
 end
 
 local TIGHT_SIDE, NARROW_SIDE = 110, 60
@@ -95,6 +175,7 @@ local function BuildGraph()
     end
 
     Flow.graph = graph
+    BuildNativeFlow(graph)
     print(("[hordez] flow graph: %d nav areas (%d tight), %d climb / vault links (%s), built in %.1f s"):format(
         #graph.ids, table.Count(graph.tight), links, source, SysTime() - started))
 end
@@ -506,7 +587,7 @@ local function SolveFlow(sources)
     end
 
     local budget = math.max(100, HZ.CV.flow_budget:GetInt())
-    local maxd = HZ.CV.flow_range:GetFloat()
+    local maxd = HZ.GlobalAggro and 1e9 or HZ.CV.flow_range:GetFloat()
     local pops = 0
     local incoming, cost = graph.inc, graph.cost
     while heapSize > 0 do
@@ -547,7 +628,7 @@ local function SolveFlow(sources)
 end
 
 local function SourceKey(src)
-    local parts = { HZ.CV.flow_range:GetString() }
+    local parts = { HZ.GlobalAggro and "aggro" or HZ.CV.flow_range:GetString() }
     for i = 1, #src do
         local source = src[i]
         parts[#parts + 1] = source[1] .. ":" .. source[2]:GetCreationID()
@@ -558,6 +639,14 @@ end
 
 local function GatherSources()
     local src = {}
+    if IsValid(HZ.GlobalAggro) then
+        local area = Flow.AreaOf(HZ.GlobalAggro)
+        if area then
+            src[1] = { area:GetID(), HZ.GlobalAggro }
+            return src
+        end
+    end
+
     for _, target in ipairs(HZ.GetTargets()) do
         if IsValid(target.ent) then
             local area = Flow.AreaOf(target.ent)
@@ -600,6 +689,39 @@ hook.Add("Think", "hordez_flow", function()
 
     if not needed then return end
 
+    local nativeOn = HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib.FlowNew ~= nil
+    if not nativeOn and Flow.native then
+        FreeNativeFlow()
+        Flow.dist, Flow.nxt, Flow.tgt = {}, {}, {}
+        solvedKey = nil
+    end
+
+    if nativeOn and not Flow.native then
+        if not co_solve then
+            co_solve = coroutine.create(function()
+                BuildNativeFlow(Flow.graph)
+            end)
+        end
+    end
+
+    if nativeSolving and Flow.native then
+        local t0 = HZ.ProfOn and SysTime()
+        local done = HZ.NativeLib.FlowSolvePoll(Flow.native)
+        if t0 then HZ.ProfAdd("sv_flow", SysTime() - t0) end
+        if done then
+            nativeSolving = false
+            BindNativeTables(Flow.native, nativePendingEnts)
+            Flow.version = (Flow.version or 0) + 1
+            Flow.ready = true
+            Flow.stamp = CurTime()
+            solvedKey = nativePendingKey
+            nativePendingEnts, nativePendingKey = nil, nil
+            nextSolve = CurTime() + 0.5
+        end
+
+        return
+    end
+
     if co_solve then
         local t0 = HZ.ProfOn and SysTime()
         local ok, err = Resume(co_solve)
@@ -633,6 +755,31 @@ hook.Add("Think", "hordez_flow", function()
         return
     end
 
+    if nativeOn and Flow.native then
+        local ents = {}
+        local n = 0
+        for i = 1, #src do
+            local source = src[i]
+            ents[i] = source[2]
+            nativeSrcFlat[n + 1] = source[1]
+            nativeSrcFlat[n + 2] = i
+            n = n + 2
+        end
+
+        for i = #nativeSrcFlat, n + 1, -1 do nativeSrcFlat[i] = nil end
+        local t0 = HZ.ProfOn and SysTime()
+        local maxd = HZ.GlobalAggro and 1e9 or HZ.CV.flow_range:GetFloat()
+        local started = HZ.NativeLib.FlowSolveStart(Flow.native, nativeSrcFlat, maxd)
+        if t0 then HZ.ProfAdd("sv_flow", SysTime() - t0) end
+        if started then
+            nativeSolving = true
+            nativePendingEnts = ents
+            nativePendingKey = key
+        end
+
+        return
+    end
+
     co_solve = coroutine.create(function()
         SolveFlow(src)
         solvedKey = key
@@ -640,6 +787,12 @@ hook.Add("Think", "hordez_flow", function()
 end)
 
 function Flow.Step(areaId)
+    if Flow.native and Flow.nativeTargets and HZ.NativeLib then
+        local nxt, dist, slot = HZ.NativeLib.FlowStep(Flow.native, areaId)
+
+        return nxt, dist, slot and Flow.nativeTargets[slot] or nil
+    end
+
     return Flow.nxt[areaId], Flow.dist[areaId], Flow.tgt[areaId]
 end
 
@@ -652,6 +805,7 @@ concommand.Add("hz_flow_rebuild", function(ply, _, args)
     if IsValid(ply) and not ply:IsAdmin() then return end
 
     if args[1] == "fresh" then file.Delete(LinkFile()) end
+    FreeNativeFlow()
     Flow.graph, Flow.noNav, Flow.ready = nil, nil, false
     Flow.dist, Flow.nxt, Flow.tgt = {}, {}, {}
     co_graph, co_solve, solvedKey = nil, nil, nil

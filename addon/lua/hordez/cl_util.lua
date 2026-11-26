@@ -269,7 +269,40 @@ local function IsNearer(a, b)
     return orderDist[a] < orderDist[b]
 end
 
+local ccEnts, ccPts = {}, {}
+
 local function CrowdCover(ex, ey, ez, aimX, aimY)
+    if HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib and HZ.NativeLib.ClientCover then
+        local count = 0
+        for i = 1, #list do
+            local ent = list[i]
+            if IsValid(ent) and not ent.hz_ragdolled and not ent.hz_imp and not ent:IsDormant() then
+                local pos = ent:GetPos()
+                count = count + 1
+                ccEnts[count] = ent
+                local at = count * 3
+                ccPts[at - 2], ccPts[at - 1], ccPts[at] = pos.x, pos.y, pos.z
+            end
+        end
+
+        for i = #ccEnts, count + 1, -1 do ccEnts[i] = nil end
+        for i = #ccPts, count * 3 + 1, -1 do ccPts[i] = nil end
+        if count == 0 then return end
+
+        local covers = HZ.NativeLib.ClientCover(ccPts, ex, ey, ez, aimX, aimY)
+        for i = 1, count do
+            local ent = ccEnts[i]
+            local covered = covers[i]
+            if not covered or covered < 0 then
+                ent.hz_cover = 0
+            else
+                ent.hz_cover = (ent.hz_cover or covered) * 0.5 + covered * 0.5
+            end
+        end
+
+        return
+    end
+
     for i = 0, CELLS - 1 do cover[i] = 0 end
     local count = 0
     for i = 1, #list do

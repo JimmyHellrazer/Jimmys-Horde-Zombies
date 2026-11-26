@@ -50,8 +50,19 @@ local rates = {}
 local CACHE_VER = 1
 local CACHE_META = "hordez/impostor_meta"
 
+local function LayerMaterial(material)
+    if not HZ.DX12 then return Material(material) end
+
+    local params = file.Read("materials/" .. material .. ".vmt", "GAME")
+    local values = params and util.KeyValuesToTable(params, false, true) or {}
+    values["$pixshader"] = "hz_impostor_ps64"
+    values["$vertexshader"] = "hz_impostor_vs64"
+
+    return CreateMaterial(string.Replace(material, "/", "_") .. "_dx12", "screenspace_general", values)
+end
+
 local function Layer(size, name, material, cache)
-    return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = Material(material),
+    return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = LayerMaterial(material),
         rt = GetRenderTargetEx(name, size, size, RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_SEPARATE, 0, 0,
         IMAGE_FORMAT_RGBA8888),
         cache = cache, buckets = {}, count = 0 }
@@ -498,6 +509,30 @@ local function GatherBucket(bucket, now)
 
             count = count + 1
         end
+
+        local clusters = HZ.VirtualClusters
+        if clusters then
+            for i = 1, #clusters do
+                if i % BUCKETS == bucket then
+                    local c = clusters[i]
+                    local n = math.min(math.max(c.d, 2), 6)
+                    local rad = c.r
+                    for k = 1, n do
+                        if count >= BUCKET_QUADS then break end
+
+                        local ang = (i * 1.7 + k * 2.39996) % (PI * 2)
+                        local dist = rad * (0.2 + 0.7 * (k / n))
+                        local cx = c.x + math.cos(ang) * dist
+                        local cy = c.y + math.sin(ang) * dist
+                        local cz = c.z
+                        local dx, dy, dz = cx - ex, cy - ey, cz - ez
+                        EmitQuad(bucket, c, now, cx, cy, cz, 0, 0, true, ang, i * 16 + k, k % 2 == 0, false,
+                            dx * dx + dy * dy + dz * dz, 1)
+                        count = count + 1
+                    end
+                end
+            end
+        end
     end
 
     return count
@@ -646,7 +681,8 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     if depth or sky or sky3d then return end
 
     local now = CurTime()
-    if SHADER_OK and not ready and not bakeAt and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl)) then
+    if SHADER_OK and not ready and not bakeAt
+        and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl) or #HZ.VirtualClusters > 0) then
         if not LoadCache() then StartBake() end
     end
 

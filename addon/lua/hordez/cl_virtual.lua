@@ -1,6 +1,7 @@
 HZ.VirtualCl = HZ.VirtualCl or {}
 HZ.VirtualGroups = HZ.VirtualGroups or {}
 HZ.VirtualBuckets = HZ.VirtualBuckets or {}
+HZ.VirtualClusters = HZ.VirtualClusters or {}
 local BUCKETS = 32
 for b = 0, BUCKETS - 1 do HZ.VirtualBuckets[b] = HZ.VirtualBuckets[b] or {} end
 local rows, groups, buckets = HZ.VirtualCl, HZ.VirtualGroups, HZ.VirtualBuckets
@@ -115,6 +116,25 @@ net.Receive("hz_virt", function()
     end
 end)
 
+net.Receive("hz_clusters", function()
+    local clusters = HZ.VirtualClusters
+    local count = net.ReadUInt(10)
+    for i = 1, count do
+        local x, y, z = ReadPos()
+        local radius = net.ReadUInt(9)
+        local density = net.ReadUInt(4)
+        local c = clusters[i]
+        if not c then
+            c = {}
+            clusters[i] = c
+        end
+
+        c.x, c.y, c.z, c.r, c.d = x, y, z, radius, density
+    end
+
+    for i = #clusters, count + 1, -1 do clusters[i] = nil end
+end)
+
 local function RequestSync()
     net.Start("hz_virt_sync")
     net.SendToServer()
@@ -126,6 +146,8 @@ if IsValid(LocalPlayer and LocalPlayer()) then RequestSync() end
 hook.Add("PostCleanupMap", "hordez_virtual", function()
     for id in pairs(rows) do rows[id] = nil end
     for id in pairs(groups) do groups[id] = nil end
+    local clusters = HZ.VirtualClusters
+    for i = #clusters, 1, -1 do clusters[i] = nil end
     for b = 0, BUCKETS - 1 do
         local bucket = buckets[b]
         for i = #bucket, 1, -1 do bucket[i] = nil end

@@ -28,6 +28,7 @@ HZ.CV = {
     real_max    = MakeConVar("hz_real_max", "150", "Real zombie limit"),
     virt_near   = MakeConVar("hz_virtual_near", "2000", "Turn real within"),
     virt_far    = MakeConVar("hz_virtual_far", "2800", "Turn virtual beyond"),
+    native      = MakeConVar("hz_native", "1", "Native module"),
     sit         = MakeConVar("hz_sit", "1", "Sit on chairs and ledges when idle"),
     barricade   = MakeConVar("hz_barricade", "1", "Bash player props"),
     barricade_hp = MakeConVar("hz_barricade_health", "1", "Prop toughness"),

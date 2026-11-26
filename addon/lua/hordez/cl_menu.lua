@@ -132,6 +132,13 @@ local function ServerPanel(panel)
         ui.Check("Virtual zombies for large hordes", "hz_virtual")
         ui.Slider("Real zombie limit", "hz_real_max", 20, 500, 0)
     end)
+
+    if HZ.ServerNative() then
+        Section(panel, "Native module", false, function(ui)
+            ui.Check("Use the num module", "hz_native")
+            ui.Note("Works out which virtual zombies are hidden on other threads")
+        end)
+    end
 end
 
 local function ClientPanel(panel)

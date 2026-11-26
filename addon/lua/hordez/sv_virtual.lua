@@ -1,6 +1,7 @@
 util.AddNetworkString("hz_virt")
 util.AddNetworkString("hz_virt_sync")
 util.AddNetworkString("hz_zoom")
+util.AddNetworkString("hz_clusters")
 
 local CV = HZ.CV
 local Flow = HZ.Flow
@@ -57,6 +58,29 @@ end
 
 local GROUP_MAX, GROUP_RADIUS = 24, 90
 local groups, groupArr, openGroups = {}, {}, {}
+local ID_MAX = 65000
+local crowd
+
+local function RowCover(row)
+    if crowd then return HZ.NativeLib.CrowdRowCover(crowd, row.id) end
+
+    return row.hz_cover or 0
+end
+
+local function SyncMotion(group)
+    if not crowd then return end
+
+    HZ.NativeLib.CrowdSetMotion(crowd, group.id, group.x, group.y, group.z, group.wx, group.wy, group.wz, group.t0,
+        group.t1)
+end
+
+local function AddCrowdGroup(group, now)
+    local lib = HZ.NativeLib
+    SyncMotion(group)
+    lib.CrowdSetShambler(crowd, group.id, group.shambler)
+    if lib.CrowdSetGroupSim then lib.CrowdSetGroupSim(crowd, group.id, group.speed, group.area or 0) end
+    lib.CrowdNoteGroup(crowd, group.id, now)
+end
 local ownedCount, ownedHorde = {}, {}
 
 function HZ.VirtualOwned(owner)
@@ -87,7 +111,7 @@ local function IdPool()
             return id
         end
 
-        if self.nextId > 65000 then return nil end
+        if self.nextId > ID_MAX then return nil end
 
         self.nextId = self.nextId + 1
 
@@ -225,15 +249,21 @@ local function NewGroup(pos, speed, shambler, area)
     group._gi = gi
     openGroups[id] = group
     pendGroupAdd[#pendGroupAdd + 1] = group
+    if crowd then AddCrowdGroup(group, now) end
 
     return group
 end
 
-local function JoinGroup(row, pos, speed, area)
-    local now = CurTime()
+local function OpenGroupNear(pos, shambler, now)
+    if crowd then
+        local id = HZ.NativeLib.CrowdJoin(crowd, now, pos.x, pos.y, pos.z, shambler, GROUP_RADIUS, GROUP_MAX, 60)
+
+        return id and groups[id]
+    end
+
     local best, bestDist
     for _, group in pairs(openGroups) do
-        if group.shambler == row.shambler and group.count < GROUP_MAX then
+        if group.shambler == shambler and group.count < GROUP_MAX then
             local x, y, z = PosAt(group, now)
             local dx, dy = pos.x - x, pos.y - y
             local distSqr = dx * dx + dy * dy
@@ -244,7 +274,12 @@ local function JoinGroup(row, pos, speed, area)
         end
     end
 
-    best = best or NewGroup(pos, speed, row.shambler, area)
+    return best
+end
+
+local function JoinGroup(row, pos, speed, area)
+    local now = CurTime()
+    local best = OpenGroupNear(pos, row.shambler, now) or NewGroup(pos, speed, row.shambler, area)
     if not best then return false end
 
     local x, y = PosAt(best, now)
@@ -256,7 +291,10 @@ local function JoinGroup(row, pos, speed, area)
     return true
 end
 
+local SyncCrowd
+
 function HZ.AddVirtual(pos, opts)
+    SyncCrowd()
     local id = rowIds:Take()
     if not id then return nil end
 
@@ -287,6 +325,7 @@ function HZ.AddVirtual(pos, opts)
 
     rows[id] = row
     HZ.VCount = HZ.VCount + 1
+    if crowd then HZ.NativeLib.CrowdSetRow(crowd, id, row.group.id, row.ox, row.oy, row.hz_cover or 0) end
     CountOwned(row, 1)
     row._pendAdd = true
     pendAdd[#pendAdd + 1] = row
@@ -309,6 +348,7 @@ local function DropGroup(group)
     if groups[group.id] ~= group then return end
 
     groups[group.id] = nil
+    if crowd then HZ.NativeLib.CrowdDropGroup(crowd, group.id) end
     local gi = group._gi
     if gi then
         local last = #groupArr
@@ -338,6 +378,7 @@ end
 local function DropRow(row, killed)
     if rows[row.id] ~= row then return end
 
+    if crowd then HZ.NativeLib.CrowdRemoveRow(crowd, row.id) end
     rows[row.id] = nil
     HZ.VCount = HZ.VCount - 1
     CountOwned(row, -1)
@@ -379,7 +420,7 @@ local STEP, LEG_TIME = 260, 1.2
 local FAR_LEG_DIST, FAR_LEG_SCALE = 3000, 4
 local probe = Vector()
 
-local function NextLeg(group, now, x, y, z)
+local function PlanLeg(group, now, x, y, z)
     local graph = Flow.graph
     if not graph or not Flow.ready then
         group.t1 = now + 1
@@ -474,9 +515,15 @@ local function NextLeg(group, now, x, y, z)
     end
 end
 
+local function NextLeg(group, now, x, y, z)
+    PlanLeg(group, now, x, y, z)
+    SyncMotion(group)
+end
+
 local function HaltGroup(group, now, x, y, z)
     group.hold = true
     group.x, group.y, group.z, group.wx, group.wy, group.wz, group.t0, group.t1 = x, y, z, x, y, z, now, now
+    SyncMotion(group)
     if not group._pendMove then
         group._pendMove = true
         pendMove[#pendMove + 1] = group
@@ -505,7 +552,7 @@ local function PromoteRow(row, x, y, z)
     if owner and owner.HZ_OnZombieReal then owner:HZ_OnZombieReal(ent, row) end
     ent.hz_wasVirtual = true
     ent.hz_promotedAt = CurTime()
-    ent.hz_cover = row.hz_cover
+    ent.hz_cover = RowCover(row)
     DropRow(row, false)
 
     return ent
@@ -649,6 +696,65 @@ local function ZoomDistSqr(x, y, z, best, pad)
     return best
 end
 
+local function NearestViewer2(targets, targetCount, x, y, z)
+    local best = huge
+    for i = 1, targetCount do
+        local viewer = targets[i]
+        local dx, dy, dz = viewer.x - x, viewer.y - y, viewer.z - z
+        local distSqr = dx * dx + dy * dy + dz * dz
+        if distSqr < best then best = distSqr end
+    end
+
+    return best
+end
+
+local viewerFlat, zoomFlat = {}, {}
+local nearPass = 0
+
+local function FlattenViewers(targets, targetCount)
+    for i = 1, targetCount do
+        local viewer, at = targets[i], i * 3
+        viewerFlat[at - 2], viewerFlat[at - 1], viewerFlat[at] = viewer.x, viewer.y, viewer.z
+    end
+
+    for i = #viewerFlat, targetCount * 3 + 1, -1 do viewerFlat[i] = nil end
+
+    for i = 1, zoomCount do
+        local zv, at = zooms[i], (i - 1) * 9
+        zoomFlat[at + 1], zoomFlat[at + 2], zoomFlat[at + 3] = zv.ex, zv.ey, zv.ez
+        zoomFlat[at + 4], zoomFlat[at + 5], zoomFlat[at + 6] = zv.ax, zv.ay, zv.az
+        zoomFlat[at + 7], zoomFlat[at + 8], zoomFlat[at + 9] = zv.cosSqr, zv.tanCone, zv.zoomSqr
+    end
+
+    for i = #zoomFlat, zoomCount * 9 + 1, -1 do zoomFlat[i] = nil end
+end
+
+local function NativeNear(now, targets, targetCount, near, consider)
+    FlattenViewers(targets, targetCount)
+    local groupList, rowList = HZ.NativeLib.CrowdNear(crowd, now, viewerFlat, zoomFlat, near, GROUP_RADIUS)
+    nearPass = nearPass + 1
+    for i = 1, #groupList, 2 do
+        local group = groups[groupList[i]]
+        if group then group.nearest, group.cover = groupList[i + 1], 0 end
+    end
+
+    for i = 1, #rowList, 2 do
+        if i % 128 == 1 and Breathe() then now = CurTime() end
+
+        local row = rows[rowList[i]]
+        if row then
+            local group = row.group
+            if group._nearPass ~= nearPass then
+                group._nearPass = nearPass
+                group.nearest, group.cover = huge, huge
+            end
+
+            local x, y, z = RowPos(row, now)
+            consider(row, group, x, y, z, rowList[i + 1])
+        end
+    end
+end
+
 local function NearestTarget2(targets, targetCount, pos)
     local best = huge
     for i = 1, targetCount do
@@ -718,7 +824,7 @@ local function CoverFor(eye, now)
 
     local groupRangeSqr = (COVER_RANGE + GROUP_RADIUS) * (COVER_RANGE + GROUP_RADIUS)
     for g = 1, #groupArr do
-        if Breathe() then now = CurTime() end
+        if g % 32 == 0 and Breathe() then now = CurTime() end
 
         local group = groupArr[g]
         if not group then break end
@@ -797,17 +903,88 @@ local function CoverPass()
     end
 end
 
-local function CoverScale(ref)
-    local factor = 1 + 0.75 * min(ref.hz_cover or 0, 8)
+local function CoverScale(cover)
+    local factor = 1 + 0.75 * min(cover or 0, 8)
 
     return factor * factor
+end
+
+function SyncCrowd()
+    local lib = HZ.NativeLib
+    if HZ.NativeOn() then
+        if crowd then return crowd end
+
+        crowd = lib.Crowd(ID_MAX, ID_MAX)
+        local now = CurTime()
+        for _, group in pairs(groups) do AddCrowdGroup(group, now) end
+        for id, row in pairs(rows) do lib.CrowdSetRow(crowd, id, row.group.id, row.ox, row.oy, row.hz_cover or 0) end
+
+        return crowd
+    end
+
+    if crowd then
+        for id, row in pairs(rows) do row.hz_cover = lib.CrowdRowCover(crowd, id) end
+        lib.CrowdFree(crowd)
+        crowd = nil
+    end
+
+    return nil
+end
+
+local eyes, extras, extraRefs = {}, {}, {}
+
+local function NativeCoverPass()
+    local lib = HZ.NativeLib
+    local eyeCount = 0
+    for _, ply in ipairs(player.GetAll()) do
+        local eye = ply:EyePos()
+        eyes[eyeCount + 1], eyes[eyeCount + 2], eyes[eyeCount + 3] = eye.x, eye.y, eye.z
+        eyeCount = eyeCount + 3
+    end
+
+    for i = #eyes, eyeCount + 1, -1 do eyes[i] = nil end
+
+    local extraCount = 0
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) and not zombie.hz_dead then
+            local pos = zombie:GetPos()
+            extraCount = extraCount + 1
+            extraRefs[extraCount] = zombie
+            local at = extraCount * 3
+            extras[at - 2], extras[at - 1], extras[at] = pos.x, pos.y, pos.z
+        end
+    end
+
+    for i = #extras, extraCount * 3 + 1, -1 do extras[i] = nil end
+    for i = #extraRefs, extraCount + 1, -1 do extraRefs[i] = nil end
+
+    lib.CrowdSetViewers(crowd, eyes)
+    lib.CrowdSetExtras(crowd, extras)
+    if not lib.CrowdCoverStart(crowd, COVER_RANGE, CurTime()) then return end
+
+    while not lib.CrowdCoverPoll(crowd) do yield() end
+
+    for i = 1, extraCount do
+        local zombie = extraRefs[i]
+        if IsValid(zombie) then
+            local cur = lib.CrowdExtraCover(crowd, i)
+            local val = ((zombie.hz_cover or 0) + cur) * 0.5
+            zombie.hz_cover = (cur == 0 and val < 0.01) and 0 or val
+        end
+
+        extraRefs[i] = nil
+    end
 end
 
 SlicedPass("cover", 1, "sv_vcover", function()
     if not HZ.VirtualOn() or HZ.AIDisabled() then return end
     if HZ.VCount == 0 and HZ.Count <= CV.real_max:GetInt() then return end
 
-    CoverPass()
+    if SyncCrowd() then
+        NativeCoverPass()
+    else
+        CoverPass()
+    end
 end)
 
 local PROMOTE_PER_PASS = 2
@@ -845,7 +1022,7 @@ local function TradePlaces(count, targets, targetCount, cap)
                     if Demotable(zombie) then
                         local pos = zombie:GetPos()
                         reals[#reals + 1] = { z = zombie, pos = pos,
-                            d2 = NearestTarget2(targets, targetCount, pos) * CoverScale(zombie) }
+                            d2 = NearestTarget2(targets, targetCount, pos) * CoverScale(zombie.hz_cover) }
                     end
                 end
 
@@ -862,6 +1039,25 @@ local function TradePlaces(count, targets, targetCount, cap)
 
         if not done and wait.d2 < 650 * 650 and HZ.Count < cap * 2 then PromoteRow(row, wait.x, wait.y, wait.z) end
     end
+end
+
+local targetPosFlat = {}
+
+local function FlattenFlowTargets()
+    local ents = Flow.nativeTargets
+    local n = ents and #ents or 0
+    for i = 1, n do
+        local ent = ents[i]
+        local at = i * 3
+        if IsValid(ent) then
+            local pos = ent:GetPos()
+            targetPosFlat[at - 2], targetPosFlat[at - 1], targetPosFlat[at] = pos.x, pos.y, pos.z
+        else
+            targetPosFlat[at - 2], targetPosFlat[at - 1], targetPosFlat[at] = 0, 0, 0
+        end
+    end
+
+    for i = #targetPosFlat, n * 3 + 1, -1 do targetPosFlat[i] = nil end
 end
 
 SlicedPass("walk", 0.25, "sv_virtual", function()
@@ -881,55 +1077,101 @@ SlicedPass("walk", 0.25, "sv_virtual", function()
     local real, promoted = HZ.Count, 0
     local waitCount = 0
 
-    for g = #groupArr, 1, -1 do
-        if Breathe() then now, real = CurTime(), HZ.Count end
+    if SyncCrowd() and HZ.NativeLib.CrowdStep and Flow.native and Flow.ready then
+        FlattenViewers(targets, targetCount)
+        FlattenFlowTargets()
+        local promotes, waits, moves = HZ.NativeLib.CrowdStep(
+            crowd, Flow.native, now, viewerFlat, zoomFlat, targetPosFlat,
+            near, GROUP_RADIUS, real, cap, PROMOTE_PER_PASS, SWAP_PER_PASS * 4
+        )
 
-        local group = groupArr[g]
-        if group and group.count > 0 then
-            local gx, gy, gz = PosAt(group, now)
-            group._x, group._y, group._z, group._at = gx, gy, gz, now
-            local groupBest = huge
-            for i = 1, targetCount do
-                local viewer = targets[i]
-                local dx, dy, dz = viewer.x - gx, viewer.y - gy, viewer.z - gz
-                local distSqr = dx * dx + dy * dy + dz * dz
-                if distSqr < groupBest then groupBest = distSqr end
-            end
+        for i = 1, #promotes, 5 do
+            local row = rows[promotes[i]]
+            if row then PromoteRow(row, promotes[i + 1], promotes[i + 2], promotes[i + 3]) end
+        end
 
-            groupBest = ZoomDistSqr(gx, gy, gz, groupBest, GROUP_RADIUS)
-            if groupBest <= groupNearSqr then
-                group.nearest, group.cover = huge, huge
-                for _, row in pairs(group.rows) do
-                    local x, y, z = gx + row.ox, gy + row.oy, gz
-                    local best = huge
-                    for i = 1, targetCount do
-                        local viewer = targets[i]
-                        local dx, dy, dz = viewer.x - x, viewer.y - y, viewer.z - z
-                        local distSqr = dx * dx + dy * dy + dz * dz
-                        if distSqr < best then best = distSqr end
-                    end
-
-                    best = ZoomDistSqr(x, y, z, best, 0)
-
-                    if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
-                        real, promoted = real + 1, promoted + 1
-                    else
-                        if best < group.nearest then group.nearest = best end
-                        if (row.hz_cover or 0) < group.cover then group.cover = row.hz_cover or 0 end
-                        if best < nearSqr then
-                            waitCount = waitCount + 1
-                            local wait = waiting[waitCount]
-                            if not wait then
-                                wait = {}
-                                waiting[waitCount] = wait
-                            end
-
-                            wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(row), x, y, z
-                        end
-                    end
+        for i = 1, #waits, 5 do
+            local row = rows[waits[i]]
+            if row then
+                waitCount = waitCount + 1
+                local wait = waiting[waitCount]
+                if not wait then
+                    wait = {}
+                    waiting[waitCount] = wait
                 end
-            else
-                group.nearest, group.cover = groupBest, 0
+
+                wait.r = row
+                wait.d2 = waits[i + 1]
+                wait.x = waits[i + 2]
+                wait.y = waits[i + 3]
+                wait.z = waits[i + 4]
+            end
+        end
+
+        for i = #waiting, waitCount + 1, -1 do waiting[i] = nil end
+        if waitCount > 0 and targetCount > 0 then TradePlaces(waitCount, targets, targetCount, cap) end
+
+        for i = 1, #moves, 9 do
+            local group = groups[moves[i]]
+            if group then
+                group.x, group.y, group.z = moves[i + 1], moves[i + 2], moves[i + 3]
+                group.wx, group.wy, group.wz = moves[i + 4], moves[i + 5], moves[i + 6]
+                group.t0, group.t1 = moves[i + 7], moves[i + 8]
+                if not group._pendMove then
+                    group._pendMove = true
+                    pendMove[#pendMove + 1] = group
+                end
+            end
+        end
+
+        FlushNet()
+        return
+    end
+
+    local function Consider(row, group, x, y, z, best)
+        if best < nearSqr and real < cap and promoted < PROMOTE_PER_PASS and PromoteRow(row, x, y, z) then
+            real, promoted = real + 1, promoted + 1
+            return
+        end
+
+        if best < group.nearest then group.nearest = best end
+        local cover = RowCover(row)
+        if cover < group.cover then group.cover = cover end
+        if best >= nearSqr then return end
+
+        waitCount = waitCount + 1
+        local wait = waiting[waitCount]
+        if not wait then
+            wait = {}
+            waiting[waitCount] = wait
+        end
+
+        wait.r, wait.d2, wait.x, wait.y, wait.z = row, best * CoverScale(cover), x, y, z
+    end
+
+    if crowd then
+        NativeNear(now, targets, targetCount, near, Consider)
+    else
+        for g = #groupArr, 1, -1 do
+            if g % 32 == 0 and Breathe() then now, real = CurTime(), HZ.Count end
+
+            local group = groupArr[g]
+            if group and group.count > 0 then
+                local gx, gy, gz = PosAt(group, now)
+                group._x, group._y, group._z, group._at = gx, gy, gz, now
+                local groupBest = ZoomDistSqr(gx, gy, gz, NearestViewer2(targets, targetCount, gx, gy, gz),
+                    GROUP_RADIUS)
+
+                if groupBest <= groupNearSqr then
+                    group.nearest, group.cover = huge, huge
+                    for _, row in pairs(group.rows) do
+                        local x, y, z = gx + row.ox, gy + row.oy, gz
+                        Consider(row, group, x, y, z,
+                            ZoomDistSqr(x, y, z, NearestViewer2(targets, targetCount, x, y, z), 0))
+                    end
+                else
+                    group.nearest, group.cover = groupBest, 0
+                end
             end
         end
     end
@@ -938,7 +1180,7 @@ SlicedPass("walk", 0.25, "sv_virtual", function()
     if waitCount > 0 and targetCount > 0 then TradePlaces(waitCount, targets, targetCount, cap) end
 
     for g = #groupArr, 1, -1 do
-        if Breathe() then
+        if g % 32 == 0 and Breathe() then
             now = CurTime()
             FlushNet()
         end
@@ -993,7 +1235,7 @@ timer.Create("hordez_virtual_demote", 1, 0, function()
         if Demotable(zombie) then
             local pos = zombie:GetPos()
             local raw = NearestTarget2(targets, targetCount, pos)
-            local best = raw * CoverScale(zombie)
+            local best = raw * CoverScale(zombie.hz_cover)
             if (raw > always2 or (best > farSqr and real > cap)) and DemoteZombie(zombie, pos) then
                 real, done = real - 1, done + 1
             end
@@ -1088,23 +1330,13 @@ end
 
 local shotEnd = Vector()
 
-hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
-    if HZ.VCount == 0 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+local function RayHit(now, sx, sy, sz, dx, dy, dz, len, spread)
+    if crowd then
+        local id, _, x, y, z = HZ.NativeLib.CrowdRay(crowd, now, sx, sy, sz, dx, dy, dz, len, spread, GROUP_RADIUS)
 
-    local src, dir = data.Src, data.Dir
-    if not isvector(src) or not isvector(dir) then return end
+        return id and rows[id], x, y, z
+    end
 
-    dir = dir:GetNormalized()
-    local dist = data.Distance and data.Distance > 0 and data.Distance or 56756
-    local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
-    shotEnd:SetUnpacked(sx + dx * dist, sy + dy * dist, sz + dz * dist)
-    shotIn.start, shotIn.endpos, shotIn.filter = src, shotEnd, ent
-    util.TraceLine(shotIn)
-    local len = shotTr.HitPos:Distance(src)
-    local spread = HZ.BulletSpread(data.Spread)
-    local count = max(data.Num or 1, 1)
-    local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
-    local now = CurTime()
     local hit, hitT, hitX, hitY, hitZ
     for g = 1, #groupArr do
         local group = groupArr[g]
@@ -1129,6 +1361,26 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
         end
     end
 
+    return hit, hitX, hitY, hitZ
+end
+
+hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
+    if HZ.VCount == 0 or not IsValid(ent) or ent:GetClass() == "hz_zombie" then return end
+
+    local src, dir = data.Src, data.Dir
+    if not isvector(src) or not isvector(dir) then return end
+
+    dir = dir:GetNormalized()
+    local dist = data.Distance and data.Distance > 0 and data.Distance or 56756
+    local sx, sy, sz, dx, dy, dz = src.x, src.y, src.z, dir.x, dir.y, dir.z
+    shotEnd:SetUnpacked(sx + dx * dist, sy + dy * dist, sz + dz * dist)
+    shotIn.start, shotIn.endpos, shotIn.filter = src, shotEnd, ent
+    util.TraceLine(shotIn)
+    local len = shotTr.HitPos:Distance(src)
+    local spread = HZ.BulletSpread(data.Spread)
+    local count = max(data.Num or 1, 1)
+    local dmg = (data.Damage and data.Damage > 0 and data.Damage or 30) * (count > 1 and count * 0.5 or 1)
+    local hit, hitX, hitY, hitZ = RayHit(CurTime(), sx, sy, sz, dx, dy, dz, len, spread)
     if not hit then return end
 
     local attacker = IsValid(data.Attacker) and data.Attacker or ent
@@ -1171,24 +1423,36 @@ local function Blast(center, amount, attacker, inflictor)
     local radiusSqr = rad * rad
     local groupRadSqr = (rad + GROUP_RADIUS) * (rad + GROUP_RADIUS)
     local shown, noted = 0, 0
-    for _, group in pairs(groups) do
-        local gx, gy, gz = PosAt(group, now)
-        local gdx, gdy, gdz = gx - center.x, gy - center.y, gz - center.z
-        if gdx * gdx + gdy * gdy + gdz * gdz < groupRadSqr then
-            for _, row in pairs(group.rows) do
-                local x, y, z = gx + row.ox, gy + row.oy, gz
-                local dx, dy, dz = x - center.x, y - center.y, z - center.z
-                if dx * dx + dy * dy + dz * dz < radiusSqr then
-                    if shown < BLAST_REAL_MAX then
-                        shown = shown + 1
-                        HitAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400, true)
-                    else
-                        DropRow(row, true)
-                        if noted < BLAST_NOTICE_MAX then
-                            noted = noted + 1
-                            DeathNotice(attacker, inflictor)
-                        end
-                    end
+    local function Catch(row, x, y, z)
+        local dx, dy = x - center.x, y - center.y
+        if shown < BLAST_REAL_MAX then
+            shown = shown + 1
+            HitAsReal(row, x, y, z, attacker, inflictor, amount, DMG_BLAST, Vector(dx, dy, 60) * 400, true)
+            return
+        end
+
+        DropRow(row, true)
+        if noted < BLAST_NOTICE_MAX then
+            noted = noted + 1
+            DeathNotice(attacker, inflictor)
+        end
+    end
+
+    if crowd then
+        local caught = HZ.NativeLib.CrowdSphere(crowd, now, center.x, center.y, center.z, rad, GROUP_RADIUS)
+        for i = 1, #caught do
+            local row = rows[caught[i]]
+            if row then Catch(row, RowPos(row, now)) end
+        end
+    else
+        for _, group in pairs(groups) do
+            local gx, gy, gz = PosAt(group, now)
+            local gdx, gdy, gdz = gx - center.x, gy - center.y, gz - center.z
+            if gdx * gdx + gdy * gdy + gdz * gdz < groupRadSqr then
+                for _, row in pairs(group.rows) do
+                    local x, y, z = gx + row.ox, gy + row.oy, gz
+                    local dx, dy, dz = x - center.x, y - center.y, z - center.z
+                    if dx * dx + dy * dy + dz * dz < radiusSqr then Catch(row, x, y, z) end
                 end
             end
         end
@@ -1275,7 +1539,84 @@ net.Receive("hz_virt_sync", function(_, ply)
     end
 end)
 
-hook.Add("PostCleanupMap", "hordez_virtual", HZ.ClearVirtual)
+HZ.SwarmCount = HZ.SwarmCount or 0
+
+local function SendClusters(clusters)
+    local count = clusters and math.floor(#clusters / 6) or 0
+    net.Start("hz_clusters", true)
+    net.WriteUInt(count, 10)
+    for i = 1, count * 6, 6 do
+        local pop = clusters[i + 1]
+        local density = math.Clamp(math.floor(math.log(pop + 1) / math.log(2)), 1, 15)
+        WritePos(clusters[i + 2], clusters[i + 3], clusters[i + 4])
+        net.WriteUInt(math.Clamp(math.floor(clusters[i + 5]), 16, 511), 9)
+        net.WriteUInt(density, 4)
+    end
+
+    net.Broadcast()
+end
+
+function HZ.AddSwarm(total, avoidPos, minDist)
+    if not (HZ.NativeOn() and HZ.NativeLib.FlowAddPopAll and Flow.native) then return 0 end
+
+    local areas = HZ.NativeLib.FlowAddPopAll(Flow.native, total, avoidPos.x, avoidPos.y, avoidPos.z, minDist or 1200)
+    HZ.SwarmCount = math.floor(HZ.NativeLib.FlowTotalPop(Flow.native) + 0.5)
+    HZ.FlowWantedUntil = CurTime() + 60
+
+    return areas
+end
+
+function HZ.ClearSwarm()
+    if Flow.native and HZ.NativeLib and HZ.NativeLib.FlowClearPop then
+        HZ.NativeLib.FlowClearPop(Flow.native)
+    end
+
+    HZ.SwarmCount = 0
+    SendClusters(nil)
+end
+
+local SWARM_STEP = 0.5
+local SWARM_SPAWN_BUDGET = 250
+local SWARM_V_SOFT_CAP = 55000
+
+timer.Create("hordez_swarm_step", SWARM_STEP, 0, function()
+    if HZ.SwarmCount <= 0 or HZ.AIDisabled() or not HZ.VirtualOn() then return end
+    if not (HZ.NativeOn() and HZ.NativeLib.FlowStepPop and Flow.native and Flow.ready) then return end
+
+    local targets, targetCount = ViewerList()
+    if targetCount == 0 then return end
+
+    FlattenViewers(targets, targetCount)
+    local room = max(0, min(SWARM_SPAWN_BUDGET, SWARM_V_SOFT_CAP - HZ.VCount))
+    local spawnDist = max(CV.virt_far:GetFloat(), 3200)
+    local spawns, clusters = HZ.NativeLib.FlowStepPop(
+        Flow.native, SWARM_STEP, CV.runspeed:GetFloat(), viewerFlat, spawnDist, room, 128
+    )
+
+    local added = 0
+    local omni = HZ.GlobalAggro ~= nil
+    for i = 1, #spawns, 5 do
+        local areaId = spawns[i]
+        local count = spawns[i + 1]
+        local cx, cy, cz = spawns[i + 2], spawns[i + 3], spawns[i + 4]
+        local navArea = Flow.Area(areaId)
+        for _ = 1, count do
+            local pos = IsValid(navArea) and navArea:GetRandomPoint() or Vector(cx + math.Rand(-40, 40), cy + math.Rand(-40, 40), cz)
+            if HZ.AddVirtual(pos + Vector(0, 0, 4), { area = areaId, omni = omni }) then
+                added = added + 1
+            end
+        end
+    end
+
+    if added > 0 then FlushNet() end
+    SendClusters(clusters)
+    HZ.SwarmCount = math.floor(HZ.NativeLib.FlowTotalPop(Flow.native) + 0.5)
+end)
+
+hook.Add("PostCleanupMap", "hordez_virtual", function()
+    HZ.ClearVirtual()
+    HZ.ClearSwarm()
+end)
 cvars.AddChangeCallback("hz_virtual", function(_, _, new)
     if not tobool(new) then HZ.ClearVirtual() end
 end, "hordez_virtual")

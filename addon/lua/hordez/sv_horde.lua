@@ -31,7 +31,7 @@ end
 local needFlow, needFlowAt = false, 0
 
 function HZ.NeedFlow()
-    if HZ.DirectorActive or (HZ.VCount or 0) > 0 then return true end
+    if HZ.DirectorActive or (HZ.VCount or 0) > 0 or (HZ.SwarmCount or 0) > 0 or HZ.GlobalAggro then return true end
 
     local now = CurTime()
     if now < (HZ.FlowWantedUntil or 0) then return true end
@@ -1263,7 +1263,9 @@ concommand.Add("hz_clear", function(ply)
         if IsValid(zombie) then zombie:Remove() end
     end
 
+    HZ.GlobalAggro = nil
     if HZ.ClearVirtual then HZ.ClearVirtual() end
+    if HZ.ClearSwarm then HZ.ClearSwarm() end
 end)
 
 concommand.Add("hz_horde", function(ply)
@@ -1283,6 +1285,90 @@ concommand.Add("hz_alert_all", function(ply)
     for zombie in pairs(HZ.Zombies) do
         if IsValid(zombie) and not zombie.hz_alerted then zombie.hz_wakeAt = CurTime() + math.Rand(0, 1) end
     end
+end)
+
+concommand.Add("hz_aggro_all", function(ply, _, args)
+    if not IsAdmin(ply) then return end
+
+    if args[1] == "0" then
+        HZ.GlobalAggro = nil
+        for zombie in pairs(HZ.Zombies) do
+            if IsValid(zombie) then
+                zombie.hz_aggro = nil
+                zombie.hz_aggroUntil = nil
+            end
+        end
+
+        print("[hordez] global aggro cleared")
+        return
+    end
+
+    local now = CurTime()
+    local target = IsValid(ply) and ply or nil
+    HZ.GlobalAggro = target or true
+    HZ.FlowWantedUntil = now + 60
+    local count = 0
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) and not zombie.hz_dead then
+            zombie.hz_alerted = true
+            zombie.hz_wakeAt = nil
+            zombie.hz_omni = true
+            zombie.hz_lost = nil
+            zombie.hz_lastHasTarget = now
+            if target then
+                zombie.hz_aggro = target
+                zombie.hz_aggroUntil = now + 999999
+                zombie.hz_target = target
+            end
+
+            count = count + 1
+        end
+    end
+
+    local vcount = 0
+    if HZ.Virtual then
+        for _, row in pairs(HZ.Virtual) do
+            row.omni = true
+            vcount = vcount + 1
+        end
+    end
+
+    local msg = ("[hordez] aggro_all: %d real + %d virtual + %d swarm hunting %s"):format(
+        count, vcount, HZ.SwarmCount or 0, target and target:Nick() or "everyone"
+    )
+    print(msg)
+    if target then target:PrintMessage(HUD_PRINTCONSOLE, msg) end
+end)
+
+concommand.Add("hz_swarm", function(ply, _, args)
+    if not IsAdmin(ply) then return end
+
+    local want = math.max(0, math.floor(tonumber(args[1]) or 100000))
+    if want == 0 then
+        if HZ.ClearSwarm then HZ.ClearSwarm() end
+        print("[hordez] swarm cleared")
+        return
+    end
+
+    if not (HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib and HZ.NativeLib.FlowAddPopAll) then
+        print("[hordez] hz_swarm requires the native num module (hz_native 1)")
+        return
+    end
+
+    if not HZ.Flow.native then
+        HZ.FlowWantedUntil = CurTime() + 30
+        print("[hordez] flow graph still building - try again in a second")
+        return
+    end
+
+    local avoid = IsValid(ply) and ply:GetPos() or Vector(0, 0, 0)
+    local minDist = math.max(0, tonumber(args[2]) or 1200)
+    local areas = HZ.AddSwarm(want, avoid, minDist)
+    local msg = ("[hordez] swarm: added %d zombies across %d nav areas (total swarm: %d)"):format(
+        want, areas, HZ.SwarmCount or 0
+    )
+    print(msg)
+    if IsValid(ply) then ply:PrintMessage(HUD_PRINTCONSOLE, msg) end
 end)
 
 local spawnSeq = 0
@@ -1420,7 +1506,7 @@ concommand.Add("hz_status", function(ply)
         if zombie.hz_alerted then alerted = alerted + 1 end
     end
 
-    print(("[hordez] zombies %d real + %d virtual (%d alerted) / total cap %d (0 = none) | flow %s areas=%d | stress %.0f"):format(HZ.Count, HZ.VCount or 0, alerted,
+    print(("[hordez] zombies %d real + %d virtual + %d swarm (%d alerted) / total cap %d (0 = none) | flow %s areas=%d | stress %.0f"):format(HZ.Count, HZ.VCount or 0, HZ.SwarmCount or 0, alerted,
         HZ.CV.max:GetInt(), HZ.Flow.ready and "ready" or "not ready", HZ.Flow.graph and #HZ.Flow.graph.ids
         or 0, HZ.Stress))
 end)

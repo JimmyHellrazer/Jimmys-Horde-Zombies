@@ -923,6 +923,38 @@ function HZ.SpawnZombie(pos, yaw, opts)
     return zombie
 end
 
+local WARM_DELAY, WARM_INTERVAL = 2, 0.05
+
+local function WarmSpawns()
+    local queue = {}
+    for _, model in ipairs(HZ.Models) do
+        queue[#queue + 1] = { model, false }
+        queue[#queue + 1] = { model, true }
+    end
+
+    local spent, total = 0, #queue
+    timer.Create("hordez_warm_spawn", WARM_INTERVAL, total, function()
+        local entry = table.remove(queue)
+        local t0 = SysTime()
+        local zombie = ents.Create("hz_zombie")
+        if IsValid(zombie) then
+            zombie.hz_model, zombie.hz_shambler, zombie.hz_custom, zombie.hz_placed = entry[1], entry[2], false, true
+            zombie:SetNoDraw(true)
+            zombie:Spawn()
+            zombie:Remove()
+        end
+
+        spent = spent + SysTime() - t0
+        if #queue == 0 and HZ.CV.debug:GetBool() then
+            print(("[hordez] warmed %d zombie spawns in %.0f ms"):format(total, spent * 1000))
+        end
+    end)
+end
+
+hook.Add("InitPostEntity", "hordez_warm_spawn", function()
+    timer.Simple(WARM_DELAY, WarmSpawns)
+end)
+
 function HZ.IsStraggler(zombie, now)
     local wait = HZ.CV.straggle:GetFloat()
     if wait <= 0 or not IsValid(zombie) or not zombie.hz_alerted or zombie.hz_dead or zombie.hz_climbing

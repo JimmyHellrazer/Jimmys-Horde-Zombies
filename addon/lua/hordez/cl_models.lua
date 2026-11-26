@@ -71,6 +71,5 @@ function HZ.DrawCustom(ent, path, flags)
         return
     end
 
-    ent:SetupBones()
     overlay:DrawModel(flags)
 end

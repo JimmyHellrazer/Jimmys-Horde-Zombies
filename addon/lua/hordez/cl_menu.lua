@@ -208,9 +208,12 @@ local function ModelsPanel(panel)
 
     local listed = {}
     for name, path in SortedPairs(player_manager.AllValidModels()) do
-        path = string.lower(path)
-        listed[path] = true
-        ModelIcon(grid, path, name)
+        local hands = player_manager.TranslatePlayerHands(name)
+        if not hands or hands.model ~= path then
+            path = string.lower(path)
+            listed[path] = true
+            ModelIcon(grid, path, name)
+        end
     end
 
     for _, path in ipairs(HZ.CustomModels) do

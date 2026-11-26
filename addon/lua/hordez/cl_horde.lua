@@ -460,9 +460,9 @@ local function StartDeath(ent, kind, dir, groups, vel)
     return true
 end
 
-local UP18, DOWN30 = Vector(0, 0, 18), Vector(0, 0, 30)
+local groundStart, groundEnd, moveVec, newPosVec = Vector(), Vector(), Vector(), Vector()
 local groundTr, pelvisTr = {}, {}
-local groundIn = { mask = MASK_NPCSOLID_BRUSHONLY, output = groundTr }
+local groundIn = { start = groundStart, endpos = groundEnd, mask = MASK_NPCSOLID_BRUSHONLY, output = groundTr }
 local pelvisIn = { start = Vector(), endpos = Vector(), mins = PELVIS_MINS, maxs = PELVIS_MAXS, mask = MASK_SOLID,
     filter = FilterChars, output = pelvisTr }
 
@@ -475,13 +475,16 @@ local function StepDying(death, now)
     local finishing = elapsed >= death.stop
     local sample = finishing or now >= death.nextStep
 
-    local move = Vector(0, 0, 0)
-    if death.carry then
-        local carry = death.carry * math.exp(-4 * elapsed)
-        if carry:LengthSqr() < 4 then
+    local mx, my = 0, 0
+    local carry = death.carry
+    if carry then
+        local decay = math.exp(-4 * elapsed)
+        local cx, cy = carry.x * decay, carry.y * decay
+        if cx * cx + cy * cy < 4 then
             death.carry = nil
         else
-            move = move + carry * FrameTime()
+            local dt = FrameTime()
+            mx, my = cx * dt, cy * dt
         end
     end
 
@@ -491,26 +494,28 @@ local function StepDying(death, now)
         if ok and rootMove then
             rootMove.z = 0
             rootMove:Rotate(death.yaw)
-            move = move + rootMove
+            mx, my = mx + rootMove.x, my + rootMove.y
         end
 
         death.lastCyc = cycle
     end
 
-    if move:LengthSqr() > 0.0001 then
-        local newPos = model:GetPos() + move
+    if mx * mx + my * my > 0.0001 then
+        local cur = model:GetPos()
+        local nx, ny, nz = cur.x + mx, cur.y + my, cur.z
         if sample then
-            groundIn.start, groundIn.endpos = newPos + UP18, newPos - DOWN30
+            groundStart:SetUnpacked(nx, ny, nz + 18)
+            groundEnd:SetUnpacked(nx, ny, nz - 30)
             util.TraceLine(groundIn)
-            local ground = groundTr
-            if ground.Hit and not ground.StartSolid then
-                newPos.z = ground.HitPos.z
+            if groundTr.Hit and not groundTr.StartSolid then
+                nz = groundTr.HitPos.z
             else
                 death.offLedge = true
             end
         end
 
-        model:SetPos(newPos)
+        newPosVec:SetUnpacked(nx, ny, nz)
+        model:SetPos(newPosVec)
     end
 
     if death.kicks then

@@ -697,6 +697,8 @@ function HZ.MoveBurn(from, to)
     end
 end
 
+local burnCol, partVel = Color(255, 255, 255), Vector()
+
 hook.Add("Think", "hordez_burning", function()
     if #burning == 0 then return end
 
@@ -714,7 +716,8 @@ hook.Add("Think", "hordez_burning", function()
             local step = math.floor(fade * 255)
             if step ~= burn.step then
                 burn.step = step
-                ent:SetColor(Color(burn.base.r * fade, burn.base.g * fade * 0.95, burn.base.b * fade * 0.9))
+                burnCol.r, burnCol.g, burnCol.b = burn.base.r * fade, burn.base.g * fade * 0.95, burn.base.b * fade * 0.9
+                ent:SetColor(burnCol)
             end
 
             if now > burn.untilT and burn.snd then
@@ -735,7 +738,8 @@ hook.Add("Think", "hordez_burning", function()
                             mat:GetTranslation() + VectorRand() * 4)
 
                         if particle then
-                            particle:SetVelocity(Vector(math.Rand(-8, 8), math.Rand(-8, 8), math.Rand(30, 60)))
+                            partVel:SetUnpacked(math.Rand(-8, 8), math.Rand(-8, 8), math.Rand(30, 60))
+                            particle:SetVelocity(partVel)
                             particle:SetDieTime(math.Rand(0.35, 0.6))
                             particle:SetStartAlpha(230)
                             particle:SetEndAlpha(0)
@@ -753,7 +757,8 @@ hook.Add("Think", "hordez_burning", function()
                         and emitter:Add("particle/smokesprites_000" .. math.random(1, 9), mat:GetTranslation())
 
                     if particle then
-                        particle:SetVelocity(Vector(0, 0, math.Rand(25, 45)))
+                        partVel:SetUnpacked(0, 0, math.Rand(25, 45))
+                        particle:SetVelocity(partVel)
                         particle:SetDieTime(math.Rand(1.2, 2))
                         particle:SetStartAlpha(70)
                         particle:SetEndAlpha(0)
@@ -969,10 +974,12 @@ local function RagPoints(row, rag)
 end
 
 local pelletTr = {}
-local pelletIn = { mask = MASK_SHOT, filter = SkipDead, output = pelletTr }
+local pelletEnd = Vector()
+local pelletIn = { mask = MASK_SHOT, filter = SkipDead, output = pelletTr, endpos = pelletEnd }
 
 local function OnPellet(src, dir, dmg, pellets)
-    pelletIn.start, pelletIn.endpos = src, src + dir * 8192
+    pelletIn.start = src
+    pelletEnd:SetUnpacked(src.x + dir.x * 8192, src.y + dir.y * 8192, src.z + dir.z * 8192)
     util.TraceLine(pelletIn)
     local stop = pelletTr.HitPos
     local ax, ay, az = src.x, src.y, src.z
@@ -980,7 +987,8 @@ local function OnPellet(src, dir, dmg, pellets)
     local lenSqr = dx * dx + dy * dy + dz * dz
     local len = sqrt(lenSqr)
     local hitS, hitD, hitCap, hitRag
-    for _, death in ipairs(dying) do
+    for d = 1, #dying do
+        local death = dying[d]
         local model = death.csm
         if IsValid(model) then
             local center = model:GetPos()
@@ -1005,7 +1013,8 @@ local function OnPellet(src, dir, dmg, pellets)
         end
     end
 
-    for _, ragEntry in ipairs(rags) do
+    for r = 1, #rags do
+        local ragEntry = rags[r]
         local rag = ragEntry.ent
         if IsValid(rag) then
             local center = rag:GetPos()

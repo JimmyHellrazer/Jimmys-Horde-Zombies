@@ -5,6 +5,8 @@ local BUCKETS = 32
 for b = 0, BUCKETS - 1 do HZ.VirtualBuckets[b] = HZ.VirtualBuckets[b] or {} end
 local rows, groups, buckets = HZ.VirtualCl, HZ.VirtualGroups, HZ.VirtualBuckets
 local sqrt = math.sqrt
+local BLOOD_MAX = 24
+local bloodAt = Vector()
 
 local function BucketRemove(row)
     local bucket = buckets[row.id % BUCKETS]
@@ -46,16 +48,19 @@ end
 
 net.Receive("hz_virt", function()
     local now = CurTime()
-    for _ = 1, net.ReadUInt(16) do
+    local removed = net.ReadUInt(16)
+    local stride = math.max(math.ceil(removed / BLOOD_MAX), 1)
+    for i = 1, removed do
         local id = net.ReadUInt(16)
         local killed = net.ReadBool()
         local row = rows[id]
         rows[id] = nil
         if row then BucketRemove(row) end
-        if row and killed then
+        if row and killed and i % stride == 0 then
             local x, y, z = PosAt(row, now)
+            bloodAt:SetUnpacked(x, y, z + 44)
             local effect = EffectData()
-            effect:SetOrigin(Vector(x, y, z + 44))
+            effect:SetOrigin(bloodAt)
             effect:SetNormal(vector_up)
             effect:SetColor(BLOOD_COLOR_RED)
             effect:SetScale(1)

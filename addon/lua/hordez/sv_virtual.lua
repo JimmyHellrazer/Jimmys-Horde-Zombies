@@ -662,8 +662,33 @@ local coverCells = {}
 local coverRefs, coverX, coverY, coverZ, coverDist, coverOrder = {}, {}, {}, {}, {}, {}
 local coverActive, coverPassId = {}, 0
 
-local function CoverNearer(a, b)
-    return coverDist[a] < coverDist[b]
+local COVER_BIN = 16
+local COVER_BINS = math.ceil(COVER_RANGE / COVER_BIN)
+local coverBin, binFill = {}, {}
+
+local function OrderByDistance(count)
+    for bin = 0, COVER_BINS do binFill[bin] = 0 end
+
+    for i = 1, count do
+        local bin = floor(coverDist[i] / COVER_BIN)
+        coverBin[i] = bin
+        binFill[bin] = binFill[bin] + 1
+    end
+
+    local at = 1
+    for bin = 0, COVER_BINS do
+        local size = binFill[bin]
+        binFill[bin] = at
+        at = at + size
+    end
+
+    for i = 1, count do
+        local bin = coverBin[i]
+        coverOrder[binFill[bin]] = i
+        binFill[bin] = binFill[bin] + 1
+    end
+
+    for i = #coverOrder, count + 1, -1 do coverOrder[i] = nil end
 end
 
 local function CoverFor(eye, now)
@@ -678,7 +703,7 @@ local function CoverFor(eye, now)
 
         count = count + 1
         coverRefs[count], coverX[count], coverY[count], coverZ[count] = ref, dx, dy, z + 36 - ez
-        coverDist[count], coverOrder[count] = sqrt(distSqr), count
+        coverDist[count] = sqrt(distSqr)
     end
 
     for zombie in pairs(HZ.Zombies) do
@@ -704,8 +729,8 @@ local function CoverFor(eye, now)
         end
     end
 
-    for i = #coverOrder, count + 1, -1 do coverOrder[i] = nil end
-    table.sort(coverOrder, CoverNearer)
+    OrderByDistance(count)
+    Breathe()
     for i = 0, COVER_CELLS - 1 do coverCells[i] = 0 end
 
     for k = 1, count do
@@ -786,16 +811,23 @@ local PROMOTE_PER_PASS = 2
 local SWAP_PER_PASS = 2
 local waiting = {}
 
-local function ByDist(a, b)
-    return a.d2 < b.d2
-end
-
 local function ByDistDesc(a, b)
     return a.d2 > b.d2
 end
 
+local function NearestFirst(list, count, keep)
+    for i = 1, min(keep, count) do
+        local best = i
+        for j = i + 1, count do
+            if list[j].d2 < list[best].d2 then best = j end
+        end
+
+        list[i], list[best] = list[best], list[i]
+    end
+end
+
 local function TradePlaces(count, targets, targetCount, cap)
-    table.sort(waiting, ByDist)
+    NearestFirst(waiting, count, SWAP_PER_PASS)
     local reals
     for i = 1, min(count, SWAP_PER_PASS) do
         local wait = waiting[i]
@@ -1010,6 +1042,8 @@ function HZ.SpawnChaser(pos, opts)
     return nil, row
 end
 
+local killingAsReal = false
+
 local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force)
     local ent = PromoteRow(row, x, y, z)
     if not ent then
@@ -1027,7 +1061,9 @@ local function KillAsReal(row, x, y, z, attacker, inflictor, dmg, dmgType, force
         dmgInfo:SetInflictor(IsValid(inflictor) and inflictor or (IsValid(attacker) and attacker or game.GetWorld()))
         dmgInfo:SetDamagePosition(ent:WorldSpaceCenter())
         dmgInfo:SetDamageForce(force)
+        killingAsReal = true
         ent:TakeDamageInfo(dmgInfo)
+        killingAsReal = false
     end)
 end
 
@@ -1089,7 +1125,7 @@ end)
 local BLAST_REAL_MAX = 12
 local nextBlast = 0
 hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
-    if HZ.VCount == 0 or not dmg:IsExplosionDamage() then return end
+    if killingAsReal or HZ.VCount == 0 or not dmg:IsExplosionDamage() then return end
 
     local now = CurTime()
     if now < nextBlast then return end

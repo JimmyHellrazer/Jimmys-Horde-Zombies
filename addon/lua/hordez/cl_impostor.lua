@@ -39,7 +39,7 @@ local VARIANTS = {
 local rates = {}
 
 local CACHE_VER = 1
-local CACHE_META = "hordez/impostor_meta.json"
+local CACHE_META = "hordez/impostor_meta"
 
 local function Layer(size, name, material, cache)
     return { size = size, cellW = size / 32, cellH = size / 16, inset = 0.5 / size, mat = Material(material),
@@ -48,8 +48,8 @@ local function Layer(size, name, material, cache)
         cache = cache, buckets = {}, count = 0 }
 end
 
-local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor", "hordez/impostor_far.png")
-local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near", "hordez/impostor_near.png")
+local farLayer = Layer(1024, "hz_impostor_atlas", "hordez/impostor", "hordez/impostor_far")
+local nearLayer = Layer(2048, "hz_impostor_atlas_near", "hordez/impostor_near", "hordez/impostor_near")
 local LAYERS = { farLayer, nearLayer }
 local SHADER_OK = system.IsWindows() and (render.GetDXLevel() or 90) >= 90
     and not farLayer.mat:IsError() and not nearLayer.mat:IsError()
@@ -75,6 +75,10 @@ local function ModelSignature()
     return CustomShare() .. "|" .. table.concat(list, "|")
 end
 
+local function CachePath(base, signature, extension)
+    return base .. "_" .. util.CRC(signature) .. "." .. extension
+end
+
 local function CustomFor(variantIndex)
     local list = HZ.CustomModels or {}
     if #list == 0 or (variantIndex * 0.618034) % 1 >= CustomShare() then return nil end
@@ -89,32 +93,35 @@ local function SaveCache()
         local png = render.Capture({ format = "png", alpha = true, x = 0, y = 0, w = layer.size, h = layer.size })
         render.PopRenderTarget()
         if not png or #png == 0 then return false end
-        file.Write(layer.cache, png)
+        file.Write(CachePath(layer.cache, bakeSignature, "png"), png)
     end
 
     local savedRates = {}
     for i = 0, #VARIANTS - 1 do savedRates[i + 1] = rates[i] or 1 end
-    file.Write(CACHE_META, util.TableToJSON({ version = CACHE_VER, rates = savedRates, models = bakeSignature }))
+    file.Write(CachePath(CACHE_META, bakeSignature, "json"), util.TableToJSON({ version = CACHE_VER,
+        rates = savedRates, models = bakeSignature }))
 
     return true
 end
 
 local function LoadCache()
-    if not SHADER_OK or not file.Exists(CACHE_META, "DATA") then return false end
+    local signature = ModelSignature()
+    local metaPath = CachePath(CACHE_META, signature, "json")
+    if not SHADER_OK or not file.Exists(metaPath, "DATA") then return false end
 
-    local meta = util.JSONToTable(file.Read(CACHE_META, "DATA") or "")
+    local meta = util.JSONToTable(file.Read(metaPath, "DATA") or "")
     if not istable(meta) or meta.version ~= CACHE_VER or not istable(meta.rates) or #meta.rates < #VARIANTS then
         return false
     end
 
-    local signature = ModelSignature()
-    if (meta.models or "stock") ~= signature then return false end
+    if meta.models ~= signature then return false end
 
     local loaded = {}
     for i, layer in ipairs(LAYERS) do
-        if not file.Exists(layer.cache, "DATA") then return false end
+        local path = CachePath(layer.cache, signature, "png")
+        if not file.Exists(path, "DATA") then return false end
 
-        local mat = Material("data/" .. layer.cache, "smooth")
+        local mat = Material("data/" .. path, "smooth")
         if not mat or mat:IsError() then return false end
 
         local tex = mat:GetTexture("$basetexture")
@@ -281,8 +288,8 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
         bakeModels = {}
         for _, layer in ipairs(LAYERS) do layer.mat:SetTexture("$basetexture", layer.rt) end
         dbgMat:SetTexture("$basetexture", nearLayer.rt)
-        local ok, saved = pcall(SaveCache)
-        if not (ok and saved and LoadCache()) then ready = true end
+        pcall(SaveCache)
+        ready, fromCache = true, false
         bakedSignature = bakeSignature
         bakeDoneAt = RealTime()
     end

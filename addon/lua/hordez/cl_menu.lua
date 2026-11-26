@@ -186,7 +186,7 @@ end
 
 local function ModelsPanel(panel)
     panel:ClearControls()
-    panel:Help("Zombies wear the selected models. Only the host or a superadmin can change them")
+    panel:Help("Replace zombie models with your own custom one")
     panel:NumSlider("Share of zombies", "hz_custom_share", 0, 1, 2)
 
     local entry = panel:TextEntry("Model path")

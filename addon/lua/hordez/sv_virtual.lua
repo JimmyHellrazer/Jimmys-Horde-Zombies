@@ -1123,19 +1123,36 @@ hook.Add("EntityFireBullets", "hordez_virtual", function(ent, data)
 end)
 
 local BLAST_REAL_MAX = 12
-local nextBlast = 0
-hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
-    if killingAsReal or HZ.VCount == 0 or not dmg:IsExplosionDamage() then return end
+local BLAST_MERGE_TIME, BLAST_MERGE_DIST = 0.3, 150
+local BLAST_ON_REMOVE = { grenade_ar2 = 100, rpg_missile = 100, npc_grenade_frag = 125, grenade_helicopter = 100,
+    npc_satchel = 150, npc_tripmine = 150 }
+
+local recentBlasts = {}
+
+local function AlreadyBlasted(center, now)
+    for i = #recentBlasts, 1, -1 do
+        local blast = recentBlasts[i]
+        if now - blast.at > BLAST_MERGE_TIME then
+            table.remove(recentBlasts, i)
+        elseif blast.pos:DistToSqr(center) < BLAST_MERGE_DIST * BLAST_MERGE_DIST then
+            return true
+        end
+    end
+
+    recentBlasts[#recentBlasts + 1] = { pos = Vector(center.x, center.y, center.z), at = now }
+
+    return false
+end
+
+local function Blast(center, amount, attacker, inflictor)
+    if killingAsReal or HZ.VCount == 0 or not isvector(center) then return end
 
     local now = CurTime()
-    if now < nextBlast then return end
+    if AlreadyBlasted(center, now) then return end
 
-    nextBlast = now + 0.1
-    local inflictor, attacker = dmg:GetInflictor(), dmg:GetAttacker()
-    local center = IsValid(inflictor) and inflictor:GetPos() or dmg:GetDamagePosition()
-    local rad = math.Clamp(dmg:GetDamage() * 2.5, 150, 450)
+    amount = tonumber(amount) or 100
+    local rad = math.Clamp(amount * 2.5, 150, 450)
     local radiusSqr = rad * rad
-    local amount = dmg:GetDamage()
     local groupRadSqr = (rad + GROUP_RADIUS) * (rad + GROUP_RADIUS)
     local shown = 0
     for _, group in pairs(groups) do
@@ -1158,7 +1175,38 @@ hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
     end
 
     FlushNet()
+end
+
+hook.Add("EntityTakeDamage", "hordez_virtual", function(_, dmg)
+    if not dmg:IsExplosionDamage() then return end
+
+    local inflictor = dmg:GetInflictor()
+    Blast(IsValid(inflictor) and inflictor:GetPos() or dmg:GetDamagePosition(), dmg:GetDamage(), dmg:GetAttacker(),
+        inflictor)
 end)
+
+hook.Add("EntityRemoved", "hordez_virtual_blast", function(ent)
+    local amount = BLAST_ON_REMOVE[ent:GetClass()]
+    if not amount then return end
+
+    local owner = ent:GetOwner()
+    Blast(ent:GetPos(), amount, IsValid(owner) and owner or ent:GetInternalVariable("m_hThrower"), ent)
+end)
+
+HZ.EngineBlastDamage = HZ.EngineBlastDamage or util.BlastDamage
+HZ.EngineBlastDamageInfo = HZ.EngineBlastDamageInfo or util.BlastDamageInfo
+
+function util.BlastDamage(inflictor, attacker, pos, radius, damage, ...)
+    pcall(Blast, pos, damage, attacker, inflictor)
+
+    return HZ.EngineBlastDamage(inflictor, attacker, pos, radius, damage, ...)
+end
+
+function util.BlastDamageInfo(dmg, pos, radius, ...)
+    pcall(Blast, pos, dmg:GetDamage(), dmg:GetAttacker(), dmg:GetInflictor())
+
+    return HZ.EngineBlastDamageInfo(dmg, pos, radius, ...)
+end
 
 net.Receive("hz_virt_sync", function(_, ply)
     local now = CurTime()

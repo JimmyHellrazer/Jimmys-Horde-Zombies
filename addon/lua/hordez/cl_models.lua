@@ -11,6 +11,8 @@ net.Receive("hz_models", function()
     end
 
     HZ.CustomModels, HZ.CustomModelSet = list, set
+    HZ.CustomShare = net.ReadFloat()
+    HZ.RebakeImpostors()
 end)
 
 local function RequestModels()

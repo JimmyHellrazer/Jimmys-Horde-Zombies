@@ -11,6 +11,7 @@ local function Send(ply)
     net.WriteUInt(#HZ.CustomModels, 8)
     for _, path in ipairs(HZ.CustomModels) do net.WriteString(path) end
 
+    net.WriteFloat(HZ.CV.custom_share:GetFloat())
     if ply then
         net.Send(ply)
     else
@@ -48,6 +49,10 @@ end)
 net.Receive("hz_models", function(_, ply)
     Send(ply)
 end)
+
+cvars.AddChangeCallback("hz_custom_share", function()
+    Send()
+end, "hordez_models")
 
 net.Receive("hz_models_set", function(_, ply)
     if not IsValid(ply) or not ply:IsSuperAdmin() then return end

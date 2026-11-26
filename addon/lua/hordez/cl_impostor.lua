@@ -65,9 +65,7 @@ local bakeSignature, bakedSignature
 local bakeDoneAt = 0
 
 local function CustomShare()
-    local share = GetConVar("hz_custom_share")
-
-    return share and math.Round(math.Clamp(share:GetFloat(), 0, 1), 1) or 1
+    return math.Round(math.Clamp(HZ.CustomShare or 1, 0, 1), 1)
 end
 
 local function ModelSignature()
@@ -290,10 +288,16 @@ hook.Add("PostRender", "hordez_impostor_bake", function()
     end
 end)
 
-timer.Create("hordez_impostor_models", 1, 0, function()
-    if not bakedSignature or bakeAt or not cvOn:GetBool() or ModelSignature() == bakedSignature then return end
+function HZ.RebakeImpostors()
+    if bakeAt then
+        StartBake()
+
+        return
+    end
+
+    if not bakedSignature or not cvOn:GetBool() or ModelSignature() == bakedSignature then return end
     if not LoadCache() then StartBake() end
-end)
+end
 
 local NOTICE_W, NOTICE_H, NOTICE_TIME = 260, 44, 1.5
 

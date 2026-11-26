@@ -1,10 +1,26 @@
 HZ.VirtualCl = HZ.VirtualCl or {}
 HZ.VirtualGroups = HZ.VirtualGroups or {}
 HZ.VirtualBuckets = HZ.VirtualBuckets or {}
-local BUCKETS = 8
+local BUCKETS = 32
 for b = 0, BUCKETS - 1 do HZ.VirtualBuckets[b] = HZ.VirtualBuckets[b] or {} end
 local rows, groups, buckets = HZ.VirtualCl, HZ.VirtualGroups, HZ.VirtualBuckets
 local sqrt = math.sqrt
+
+local function BucketRemove(row)
+    local bucket = buckets[row.id % BUCKETS]
+    local idx = row._bi
+    if not idx then return end
+
+    local last = #bucket
+    if idx ~= last then
+        local moved = bucket[last]
+        bucket[idx] = moved
+        moved._bi = idx
+    end
+
+    bucket[last] = nil
+    row._bi = nil
+end
 
 local function GroupPos(group, now)
     local t0, t1 = group.t0, group.t1
@@ -35,7 +51,7 @@ net.Receive("hz_virt", function()
         local killed = net.ReadBool()
         local row = rows[id]
         rows[id] = nil
-        buckets[id % BUCKETS][id] = nil
+        if row then BucketRemove(row) end
         if row and killed then
             local x, y, z = PosAt(row, now)
             local effect = EffectData()
@@ -66,9 +82,14 @@ net.Receive("hz_virt", function()
         local ox, oy = net.ReadInt(9), net.ReadInt(9)
         local female, shambler = net.ReadBool(), net.ReadBool()
         if group then
+            local old = rows[id]
+            if old then BucketRemove(old) end
             local row = { id = id, group = group, ox = ox, oy = oy, female = female, shambler = shambler }
             rows[id] = row
-            buckets[id % BUCKETS][id] = row
+            local bucket = buckets[id % BUCKETS]
+            local idx = #bucket + 1
+            bucket[idx] = row
+            row._bi = idx
         end
     end
 
@@ -102,6 +123,6 @@ hook.Add("PostCleanupMap", "hordez_virtual", function()
     for id in pairs(groups) do groups[id] = nil end
     for b = 0, BUCKETS - 1 do
         local bucket = buckets[b]
-        for id in pairs(bucket) do bucket[id] = nil end
+        for i = #bucket, 1, -1 do bucket[i] = nil end
     end
 end)

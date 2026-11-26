@@ -21,7 +21,7 @@ local DU, DV = 1 / 32, 1 / 16
 local NEAR_DIST = 1200
 local HALF_W, Z_LO, Z_HI = 24, -8, 88
 local MAX_QUADS = 65000
-local REBUILD = 0.25
+local REBUILD = 0.5
 
 local V_RUN_M, V_RUN_F, V_SHAMBLE, V_IDLE_M, V_IDLE_F = { 0, 1, 2 }, { 3, 4 }, 5, 6, 7
 local VARIANTS = {
@@ -259,8 +259,8 @@ concommand.Add("hz_impostor_rebake", StartBake)
 
 local count = 0
 local STRIDE = 15
-local BUCKETS = 8
-local BUCKET_QUADS = MAX_QUADS / BUCKETS
+local BUCKETS = 32
+local BUCKET_QUADS = math.ceil(MAX_QUADS / BUCKETS)
 local EPOCH_SPAN = 300
 local FADE_BAND = 0.85
 local FADE_PULL = 20
@@ -394,9 +394,11 @@ local function GatherBucket(bucket, now)
     if ready then
         local posAt = HZ.VirtualAt
         local vBucket = HZ.VirtualBuckets[bucket]
-        for id, row in pairs(vBucket) do
+        for i = 1, #vBucket do
             if count >= BUCKET_QUADS then break end
 
+            local row = vBucket[i]
+            local id = row.id
             local group = row.group
             local x, y, z = posAt(row, now)
             local moving = now < group.t1

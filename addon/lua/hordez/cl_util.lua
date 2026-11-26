@@ -373,11 +373,16 @@ timer.Create("hordez_scope_zoom", 0.2, 0, function()
     end
 end)
 
-local camPos, camAim, hasCam = Vector(), Vector(1, 0, 0), false
-hook.Add("RenderScene", "hordez_cam", function(origin, angles)
-    camPos:Set(origin)
-    camAim:Set(angles:Forward())
-    hasCam = true
+local camPos, camAim, camFrame = Vector(), Vector(1, 0, 0), -10
+hook.Add("PreDrawOpaqueRenderables", "hordez_cam", function(depth, sky, sky3d)
+    if depth or sky or sky3d then return end
+
+    local view = render.GetViewSetup()
+    if not view or view.w ~= ScrW() or view.h ~= ScrH() then return end
+
+    camPos:Set(view.origin)
+    camAim:Set(view.angles:Forward())
+    camFrame = FrameNumber()
 end)
 
 timer.Create("hordez_detail", 0.25, 0, function()
@@ -388,9 +393,10 @@ timer.Create("hordez_detail", 0.25, 0, function()
     if not IsValid(ply) then return end
 
     local t0 = HZ.ProfOn and SysTime()
-    local eye = hasCam and camPos or ply:EyePos()
+    local freshCam = FrameNumber() - camFrame <= 5
+    local eye = freshCam and camPos or ply:EyePos()
     local ex, ey, ez = eye.x, eye.y, eye.z
-    local aim = hasCam and camAim or ply:GetAimVector()
+    local aim = freshCam and camAim or ply:GetAimVector()
     local aimX, aimY, aimZ = aim.x, aim.y, aim.z
     local occlude = cvOcclude:GetBool()
     local eyeAhead = eye + ply:GetVelocity() * LOOK_AHEAD

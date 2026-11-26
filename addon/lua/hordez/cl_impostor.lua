@@ -11,6 +11,15 @@ local function ReadImpConVars()
     impLight = cvLight:GetFloat()
     impFog = cvFog:GetBool()
     impDebug = cvDebug:GetBool()
+    if not impOn and HZ.ClientZombies and HZ.SyncNoDraw then
+        for i = 1, #HZ.ClientZombies do
+            local ent = HZ.ClientZombies[i]
+            if IsValid(ent) and ent.hz_imp then
+                ent.hz_imp, ent.hz_ipt, ent.hz_fade = nil, nil, nil
+                HZ.SyncNoDraw(ent)
+            end
+        end
+    end
 end
 ReadImpConVars()
 for _, cv in ipairs({ cvOn, cvDist, cvLight, cvFog, cvDebug }) do

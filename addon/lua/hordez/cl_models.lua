@@ -71,5 +71,15 @@ function HZ.DrawCustom(ent, path, flags)
         return
     end
 
+    if ent.hz_dormant or overlay:GetParent() ~= ent or not overlay:IsEffectActive(EF_BONEMERGE) then
+        ent.hz_dormant = nil
+        overlay:SetParent(nil)
+        overlay:SetPos(ent:GetPos())
+        overlay:SetAngles(ent:GetAngles())
+        overlay:SetParent(ent)
+        overlay:AddEffects(EF_BONEMERGE)
+        overlay:InvalidateBoneCache()
+    end
+
     overlay:DrawModel(flags)
 end

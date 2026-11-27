@@ -449,6 +449,7 @@ timer.Create("hordez_detail", 0.25, 0, function()
         if IsValid(ent) and not ent.hz_ragdolled then
             if ent:IsDormant() then
                 ent.hz_lod, ent.hz_shadow, ent.hz_d2, ent.hz_cover = nil, nil, nil, nil
+                ent.hz_dormant = true
             else
                 local pos = ent:GetPos()
                 local px, py, pz = pos.x, pos.y, pos.z

@@ -12,6 +12,10 @@ net.Receive("hz_models", function()
 
     HZ.CustomModels, HZ.CustomModelSet = list, set
     HZ.CustomShare = net.ReadFloat()
+    if HZ.WarmModel then
+        for i = 1, #list do HZ.WarmModel(list[i]) end
+    end
+
     HZ.RebakeImpostors()
 end)
 

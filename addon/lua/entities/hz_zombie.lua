@@ -90,10 +90,12 @@ local function FilterPair(a, b)
     return pairFilter
 end
 
-local CLEAR_MINS, CLEAR_MAXS = Vector(-8, -8, 0), Vector(8, 8, 24)
-local FEEL_UP, FEEL_REACH, FEEL_STEER = Vector(0, 0, 24), 50, 80
+local CLEAR_MINS, CLEAR_MAXS = Vector(-12, -12, 0), Vector(12, 12, 54)
+local FEEL_MINS, FEEL_MAXS = Vector(-11, -11, 0), Vector(11, 11, 44)
+local FEEL_UP, FEEL_REACH, FEEL_STEER = Vector(0, 0, 24), 52, 84
 local FEEL_COS, FEEL_SIN = math.cos(math.rad(35)), math.sin(math.rad(35))
-local FLANK_MINS, FLANK_MAXS = Vector(-10, -10, 0), Vector(10, 10, 40)
+local FEEL_WIDE_COS, FEEL_WIDE_SIN = math.cos(math.rad(70)), math.sin(math.rad(70))
+local FLANK_MINS, FLANK_MAXS = Vector(-12, -12, 0), Vector(12, 12, 44)
 local AHEAD_MINS, AHEAD_MAXS = Vector(-10, -10, 0), Vector(10, 10, 8)
 
 local IDLE_WEIGHTS = { { "stand", 30 }, { "wander", 30 }, { "sit", 10 }, { "lie", 10 }, { "lean", 10 },
@@ -1231,12 +1233,18 @@ function ENT:HZ_NearestTarget(pos)
     return best, math.sqrt(bestDist)
 end
 
+local clearTarget
+local function ClearFilter(ent)
+    return ent ~= clearTarget and ent:GetClass() ~= "hz_zombie"
+end
+
 function ENT:HZ_Clear(pos, target)
     local tpos = target:GetPos()
-    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 20)
-    scratchTo:SetUnpacked(tpos.x, tpos.y, tpos.z + 20)
-    local tr = HullTrace(scratchFrom, scratchTo, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID_BRUSHONLY,
-        FilterPair(self, target))
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 18)
+    scratchTo:SetUnpacked(tpos.x, tpos.y, tpos.z + 18)
+    clearTarget = target
+    local tr = HullTrace(scratchFrom, scratchTo, CLEAR_MINS, CLEAR_MAXS, MASK_NPCSOLID, ClearFilter)
+    clearTarget = nil
 
     if not tr.Hit then return true end
 
@@ -1460,13 +1468,16 @@ function ENT:HZ_Brain(now)
                 local fx, fy, fz = goal.x - dy * invLen, goal.y + dx * invLen, goal.z
                 scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 20)
                 scratchTo:SetUnpacked(fx, fy, fz + 20)
-                if not HullTrace(scratchFrom, scratchTo, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID_BRUSHONLY).Hit then
+                if not HullTrace(scratchFrom, scratchTo, FLANK_MINS, FLANK_MAXS, MASK_NPCSOLID, NO_ZOMBIES).Hit then
                     local ok = not direct
                     if not ok then
                         scratchFrom:SetUnpacked(fx, fy, fz + 20)
                         scratchTo:SetUnpacked(targetPos.x, targetPos.y, targetPos.z + 20)
+                        clearTarget = target
                         ok = not HullTrace(scratchFrom, scratchTo, FLANK_MINS, FLANK_MAXS,
-                            MASK_NPCSOLID_BRUSHONLY).Hit
+                            MASK_NPCSOLID, ClearFilter).Hit
+
+                        clearTarget = nil
                     end
                     if ok then goal = Vector(fx, fy, fz) end
                 end
@@ -1773,22 +1784,26 @@ function ENT:HZ_Feel(pos, goal)
     if len < 24 then return goal, false end
 
     dx, dy = dx / len, dy / len
-    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 24)
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 18)
     local reach = math.min(FEEL_REACH, len)
-    scratchTo:SetUnpacked(pos.x + dx * reach, pos.y + dy * reach, pos.z + 24)
-    local ahead = LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID, NO_ZOMBIES)
+    scratchTo:SetUnpacked(pos.x + dx * reach, pos.y + dy * reach, pos.z + 18)
+    local ahead = HullTrace(scratchFrom, scratchTo, FEEL_MINS, FEEL_MAXS, MASK_NPCSOLID, NO_ZOMBIES)
     if not ahead.Hit or ahead.StartSolid then return goal, false end
 
     local normal = ahead.HitNormal
     local cross = dx * normal.y - dy * normal.x
     local first = cross > 0.05 and 1 or (cross < -0.05 and -1 or (self.hz_flankSlot >= 0 and 1 or -1))
-    for pass = 1, 2 do
-        local side = pass == 1 and first or -first
-        local sx = dx * FEEL_COS - dy * FEEL_SIN * side
-        local sy = dy * FEEL_COS + dx * FEEL_SIN * side
-        scratchTo:SetUnpacked(pos.x + sx * FEEL_REACH, pos.y + sy * FEEL_REACH, pos.z + 24)
-        if not LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID, NO_ZOMBIES).Hit then
-            return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
+    for anglePass = 1, 2 do
+        local ca = anglePass == 1 and FEEL_COS or FEEL_WIDE_COS
+        local sa = anglePass == 1 and FEEL_SIN or FEEL_WIDE_SIN
+        for pass = 1, 2 do
+            local side = pass == 1 and first or -first
+            local sx = dx * ca - dy * sa * side
+            local sy = dy * ca + dx * sa * side
+            scratchTo:SetUnpacked(pos.x + sx * FEEL_REACH, pos.y + sy * FEEL_REACH, pos.z + 18)
+            if not HullTrace(scratchFrom, scratchTo, FEEL_MINS, FEEL_MAXS, MASK_NPCSOLID, NO_ZOMBIES).Hit then
+                return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
+            end
         end
     end
 

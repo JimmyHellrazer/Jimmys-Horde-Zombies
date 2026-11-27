@@ -416,8 +416,8 @@ local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx
     quads[base + 15] = fade * 255
 end
 
-local CULL_PAD = 260
-local CULL_COS2 = 0.25 * 0.25
+local CULL_PAD = 360
+local CULL_COS2 = 0.45 * 0.45
 
 local function GatherBucket(bucket, now)
     local list = HZ.ClientZombies
@@ -614,7 +614,7 @@ local function Rebuild(now)
     local aLen = sqrt(ax * ax + ay * ay)
     if aLen > 0.05 then
         ax, ay = ax / aLen, ay / aLen
-        if ax * lastAimX + ay * lastAimY < 0.7 then
+        if ax * lastAimX + ay * lastAimY < 0.9 then
             lastAimX, lastAimY = ax, ay
             fastLeft = BUCKETS
         end

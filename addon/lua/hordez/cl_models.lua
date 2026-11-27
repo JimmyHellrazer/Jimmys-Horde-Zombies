@@ -42,6 +42,8 @@ function HZ.ToggleCustomModel(path)
     HZ.SendCustomModels(set)
 end
 
+local OVERLAY_EFFECTS = bit.bor(EF_BONEMERGE, EF_BONEMERGE_FASTCULL)
+
 local function Overlay(ent, path)
     local overlay = ent.hz_overlay
     if IsValid(overlay) and overlay.hz_path == path then return overlay end
@@ -54,7 +56,7 @@ local function Overlay(ent, path)
     overlay.hz_path = path
     overlay:SetNoDraw(true)
     overlay:SetParent(ent)
-    overlay:AddEffects(EF_BONEMERGE)
+    overlay:AddEffects(OVERLAY_EFFECTS)
     ent.hz_overlay = overlay
     ent:CallOnRemove("hordez_overlay", function()
         if IsValid(ent.hz_overlay) then ent.hz_overlay:Remove() end
@@ -77,7 +79,7 @@ function HZ.DrawCustom(ent, path, flags)
         overlay:SetPos(ent:GetPos())
         overlay:SetAngles(ent:GetAngles())
         overlay:SetParent(ent)
-        overlay:AddEffects(EF_BONEMERGE)
+        overlay:AddEffects(OVERLAY_EFFECTS)
         overlay:InvalidateBoneCache()
     end
 

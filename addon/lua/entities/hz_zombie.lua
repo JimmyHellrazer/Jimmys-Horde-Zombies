@@ -1307,7 +1307,8 @@ function ENT:HZ_Brain(now)
     local pos = self:GetPos()
     self.hz_atWall = nil
     HZ.GridMove(self, pos)
-    local playerDist = HZ.NearestPlayerDist(pos)
+    local nativeFresh = self.hz_nStamp ~= nil and now - self.hz_nStamp < 0.25
+    local playerDist = nativeFresh and self.hz_nPlyDist or HZ.NearestPlayerDist(pos)
     local hotDist = CV.hot_dist:GetFloat()
     local think = (playerDist < hotDist and math.Rand(0.12, 0.18) or math.Rand(0.35, 0.5))
         * (self.hz_shambler and 2 or 1)
@@ -1336,7 +1337,16 @@ function ENT:HZ_Brain(now)
     end
 
     local target = (flowTarget and HZ.IsHostile(flowTarget)) and flowTarget or nil
-    local near, nearDist = self:HZ_NearestTarget(pos)
+    local near, nearDist
+    if nativeFresh then
+        local nt = self.hz_nTgt
+        if IsValid(nt) and HZ.IsHostile(nt) then
+            near, nearDist = nt, self.hz_nTgtDist
+        end
+    else
+        near, nearDist = self:HZ_NearestTarget(pos)
+    end
+
     if near and (not target or nearDist < 300) then target = near end
     local aggro = self.hz_aggro
     if aggro and now < (self.hz_aggroUntil or 0) and HZ.IsHostile(aggro)
@@ -1379,6 +1389,11 @@ function ENT:HZ_Brain(now)
     local dz = math.abs(targetPos.z - pos.z)
     if targetDist < (self.hz_shambler and 62 or 52) and dz < 48 then
         self:HZ_StartAttack(target)
+        return
+    end
+
+    if targetPos.z - pos.z > 76 and CV.pyramids:GetBool() and not self.hz_shambler
+        and (targetPos - pos):Length2DSqr() < 280 * 280 and self:HZ_TryPyramid(pos, targetPos, now) then
         return
     end
 
@@ -2420,6 +2435,112 @@ function ENT:OnKilled(dmg)
     net.SendPVS(self:GetPos())
     self:Extinguish()
     hook.Run("OnNPCKilled", self, dmg:GetAttacker(), dmg:GetInflictor())
+end
+
+local PYR_MINS, PYR_MAXS = Vector(-10, -10, 0), Vector(10, 10, 56)
+
+function ENT:HZ_TryPyramid(pos, targetPos, now)
+    if now < (self.hz_nextPyr or 0) then return false end
+
+    local dx, dy = targetPos.x - pos.x, targetPos.y - pos.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1 then return false end
+
+    local nx, ny = dx / len, dy / len
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 32)
+    scratchTo:SetUnpacked(pos.x + nx * 46, pos.y + ny * 46, pos.z + 32)
+    local wall = LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID_BRUSHONLY, self)
+    if not wall.Hit or wall.StartSolid or math.abs(wall.HitNormal.z) >= 0.35 then return false end
+
+    local pile, bracing, topZ = 0, 0, pos.z
+    HZ.Near(pos, 84, function(other)
+        if not other.hz_dead and other.hz_alerted then
+            pile = pile + 1
+            if (other.hz_pyrBase or 0) > now then bracing = bracing + 1 end
+            local oz = other:GetPos().z
+            if oz > topZ then topZ = oz end
+        end
+    end, self)
+
+    if pile < 3 then return false end
+
+    if bracing < 2 then
+        self.hz_pyrBase = now + 2.0
+        self.hz_goal = nil
+        self.loco:FaceTowards(wall.HitPos)
+        self:HZ_SetSeq(HZ.Pick(self.P.unreach))
+        return true
+    end
+
+    local climbZ = math.min(topZ + 44, targetPos.z + 4)
+    if climbZ <= pos.z + 18 or climbZ - pos.z > 360 then
+        self.hz_nextPyr = now + 0.5
+        return false
+    end
+
+    local wn = wall.HitNormal
+    local wx = wall.HitPos.x + wn.x * 16
+    local wy = wall.HitPos.y + wn.y * 16
+    scratchFrom:SetUnpacked(wx, wy, pos.z + 12)
+    scratchTo:SetUnpacked(wx, wy, climbZ + 8)
+    local head = HullTrace(scratchFrom, scratchTo, PYR_MINS, PYR_MAXS, MASK_NPCSOLID_BRUSHONLY, self)
+    if head.Hit then
+        self.hz_nextPyr = now + 0.6
+        return false
+    end
+
+    self.hz_climbing = true
+    self.hz_pyrBase = now + 2.5
+    self.hz_goal = nil
+    self.hz_unreach = nil
+    self.hz_yielded = true
+    self:SetAngles(Angle(0, math.deg(math.atan2(-wn.y, -wn.x)), 0))
+    self:HZ_SetSeq(self.hz_runSeq or HZ.Pick(self.P.run), 1.35)
+
+    local startZ = pos.z
+    local dur = math.Clamp((climbZ - startZ) / 135, 0.25, 1.2)
+    local t0 = CurTime()
+    local reachedTop = false
+    while not self.hz_dead and not self.hz_shove do
+        local frac = math.min((CurTime() - t0) / dur, 1)
+        local curZ = startZ + (climbZ - startZ) * frac
+        self:SetPos(Vector(wx, wy, curZ))
+        self.loco:SetVelocity(vector_origin)
+        self.hz_ownMove = engine.TickCount()
+        self.hz_pyrBase = CurTime() + 1.8
+
+        scratchFrom:SetUnpacked(wx, wy, curZ + 18)
+        scratchTo:SetUnpacked(wx - wn.x * 46, wy - wn.y * 46, curZ + 18)
+        local over = HullTrace(scratchFrom, scratchTo, PYR_MINS, PYR_MAXS, MASK_NPCSOLID_BRUSHONLY, self)
+        if not over.Hit and not over.StartSolid then
+            scratchFrom:SetUnpacked(wx - wn.x * 42, wy - wn.y * 42, curZ + 24)
+            scratchTo:SetUnpacked(wx - wn.x * 42, wy - wn.y * 42, curZ - 32)
+            local floor = LineTrace(scratchFrom, scratchTo, MASK_NPCSOLID_BRUSHONLY, self)
+            if floor.Hit and not floor.StartSolid then
+                self:SetPos(Vector(floor.HitPos.x, floor.HitPos.y, floor.HitPos.z + 4))
+                self.hz_ownMove = engine.TickCount()
+                reachedTop = true
+                break
+            end
+        end
+
+        if frac >= 1 then break end
+
+        coroutine.yield()
+    end
+
+    if not reachedTop and not self.hz_dead and not self.hz_shove then
+        local holdUntil = CurTime() + 0.55
+        while CurTime() < holdUntil and not self.hz_dead and not self.hz_shove do
+            self.loco:SetVelocity(vector_origin)
+            self.hz_pyrBase = CurTime() + 1.2
+            coroutine.yield()
+        end
+    end
+
+    self.hz_climbing = nil
+    self.hz_nextPyr = CurTime() + (reachedTop and 1.2 or 0.4)
+    return true
 end
 
 function ENT:OnStuck()

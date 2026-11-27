@@ -406,6 +406,7 @@ timer.Create("hordez_scope_zoom", 0.2, 0, function()
     end
 end)
 
+local occEnts, occPts = {}, {}
 local SHADOW_SKIP = bit.bor(EF_NOSHADOW, EF_NORECEIVESHADOW)
 local camPos, camAim, camFrame = Vector(), Vector(1, 0, 0), -10
 hook.Add("PreDrawOpaqueRenderables", "hordez_cam", function(depth, sky, sky3d)
@@ -444,6 +445,8 @@ timer.Create("hordez_detail", 0.25, 0, function()
     local crowd = cvCrowd:GetBool()
     local hide = cvCrowdHide:GetFloat()
     if crowd or hide > 0 then CrowdCover(ex, ey, ez, aimX, aimY) end
+    local bsp = occlude and HZ.GetMapBsp and HZ.GetMapBsp() or nil
+    local occCount = 0
     pass = pass + 1
     for i = 1, count do
         local ent = list[i]
@@ -499,15 +502,42 @@ timer.Create("hordez_detail", 0.25, 0, function()
                 local hidden = false
                 if occlude and not ent.hz_imp and rawDistSqr > OCCLUDE_FROM
                     and dx * aimX + dy * aimY + (dz + 36) * aimZ > -64 then
-                    ent.hz_occ = Hidden(ent, px, py, pz, eye, eyeAhead) and (ent.hz_occ or 0) + 1 or 0
-                    hidden = ent.hz_occ >= OCCLUDE_PASSES
+                    if bsp then
+                        occCount = occCount + 1
+                        occEnts[occCount] = ent
+                        local vel = ent:GetVelocity()
+                        local at = (occCount - 1) * 6
+                        occPts[at + 1], occPts[at + 2], occPts[at + 3] = px, py, pz
+                        occPts[at + 4], occPts[at + 5], occPts[at + 6] = vel.x, vel.y, vel.z
+                        hidden = (ent.hz_occ or 0) >= OCCLUDE_PASSES
+                    else
+                        ent.hz_occ = Hidden(ent, px, py, pz, eye, eyeAhead) and (ent.hz_occ or 0) + 1 or 0
+                        hidden = ent.hz_occ >= OCCLUDE_PASSES
+                    end
                 else
                     ent.hz_occ = 0
                 end
 
-                ent.hz_far = ((drawDist > 0 and distSqr > drawDistSqr) or (hide > 0 and covered >= hide) or hidden)
-                    or nil
+                local baseFar = (drawDist > 0 and distSqr > drawDistSqr) or (hide > 0 and covered >= hide)
+                ent.hz_baseFar = baseFar or nil
+                ent.hz_far = (baseFar or hidden) or nil
 
+                HZ.SyncNoDraw(ent)
+            end
+        end
+    end
+
+    if bsp and occCount > 0 then
+        for i = #occEnts, occCount + 1, -1 do occEnts[i] = nil end
+        for i = #occPts, occCount * 6 + 1, -1 do occPts[i] = nil end
+        local res = HZ.NativeLib.BspOccludedBatch(bsp, ex, ey, ez, eyeAhead.x, eyeAhead.y, eyeAhead.z, occPts)
+        for i = 1, occCount do
+            local ent = occEnts[i]
+            ent.hz_occ = res[i] and (ent.hz_occ or 0) + 1 or 0
+            local hidden = ent.hz_occ >= OCCLUDE_PASSES
+            local far = (ent.hz_baseFar or hidden) or nil
+            if ent.hz_far ~= far then
+                ent.hz_far = far
                 HZ.SyncNoDraw(ent)
             end
         end

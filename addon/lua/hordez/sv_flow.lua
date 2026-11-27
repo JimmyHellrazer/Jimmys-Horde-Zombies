@@ -167,7 +167,13 @@ local function BuildGraph()
             source = "from cache"
         else
             local saved
-            links, saved = Flow.AddClimbLinks(graph, all)
+            links, saved = Flow.AddClimbLinksNative(graph)
+            if links then
+                source = "baked native"
+            else
+                links, saved = Flow.AddClimbLinks(graph, all)
+            end
+
             Flow.SaveLinks(saved, signature)
         end
 
@@ -185,6 +191,48 @@ local CLIMB_MIN, CLIMB_MAX, GAP = 24, 168, 56
 local VAULT_GAP, VAULT_LO, VAULT_HI = 110, 18, 62
 local UP_MINS, UP_MAXS = Vector(-10, -10, 0), Vector(10, 10, 64)
 local TOP_MINS, TOP_MAXS = Vector(-12, -12, 0), Vector(12, 12, 56)
+
+function Flow.AddClimbLinksNative(graph)
+    if not (HZ.NativeOn and HZ.NativeOn() and HZ.GetMapBsp and HZ.NativeLib.BspBakeClimbs and HZ.NativeLib.FlowLoadNav) then
+        return nil
+    end
+
+    local bspId = HZ.GetMapBsp()
+    if not bspId then return nil end
+
+    local navBytes = file.Read("maps/" .. game.GetMap() .. ".nav", "GAME")
+    if not navBytes then return nil end
+
+    local lib = HZ.NativeLib
+    local okNav, navFlow = pcall(lib.FlowLoadNav, navBytes)
+    if not okNav or not navFlow then return nil end
+
+    local okBake, raw = pcall(lib.BspBakeClimbs, navFlow, bspId)
+    lib.FlowFree(navFlow)
+    if not okBake or not raw then return nil end
+
+    graph.climb = graph.climb or {}
+    local saved, count = {}, 0
+    for i = 1, #raw, 12 do
+        local id, otherId, cost = raw[i], raw[i + 1], raw[i + 2]
+        local incoming = graph.inc[otherId]
+        if incoming and graph.inc[id] then
+            local foot = Vector(raw[i + 3], raw[i + 4], raw[i + 5])
+            local top = Vector(raw[i + 6], raw[i + 7], raw[i + 8])
+            local vault, height, len = raw[i + 9], raw[i + 10], raw[i + 11]
+            local link = vault and { foot = foot, top = top, vault = true, h = height, len = len }
+                or { foot = foot, top = top }
+            incoming[#incoming + 1] = id
+            graph.cost[otherId][#incoming] = cost
+            graph.climb[id] = graph.climb[id] or {}
+            graph.climb[id][otherId] = link
+            saved[#saved + 1] = { id, otherId, cost, link }
+            count = count + 1
+        end
+    end
+
+    return count, saved
+end
 
 function Flow.AddClimbLinks(graph, all)
     local floor, max = math.floor, math.max

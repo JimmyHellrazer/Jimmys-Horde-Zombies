@@ -123,6 +123,14 @@ local SEP_DY = { 0, 0, 0, -1, 1, -1, 1, -1, 1 }
 local sepOut = Vector()
 
 function HZ.Separation(zombie, pos)
+    if zombie.hz_nStamp and CurTime() - zombie.hz_nStamp < 0.25 then
+        local sx, sy = zombie.hz_nSepX, zombie.hz_nSepY
+        if sx == 0 and sy == 0 then return nil end
+
+        sepOut:SetUnpacked(sx, sy, 0)
+        return sepOut
+    end
+
     local x, y, posZ = pos.x, pos.y, pos.z
     local cx, cy = floor(x / CELL), floor(y / CELL)
     local px, py, count = 0, 0, 0
@@ -1520,6 +1528,73 @@ local function FogDensity()
 
     SetGlobalFloat("hz_fog_density", density or 1)
 end
+
+local brainZ, brainZPts, brainTPts, brainTEnts, brainPPts = {}, {}, {}, {}, {}
+
+timer.Create("hordez_native_brain", 0.12, 0, function()
+    if HZ.Count == 0 or HZ.AIDisabled() then return end
+    if not (HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib and HZ.NativeLib.BrainStep) then return end
+
+    local t0 = HZ.ProfOn and SysTime()
+    local zc = 0
+    for zombie in pairs(HZ.Zombies) do
+        if IsValid(zombie) and not zombie.hz_dead then
+            local pos = zombie:GetPos()
+            zc = zc + 1
+            brainZ[zc] = zombie
+            local at = zc * 3
+            brainZPts[at - 2], brainZPts[at - 1], brainZPts[at] = pos.x, pos.y, pos.z
+        end
+    end
+
+    if zc == 0 then return end
+
+    for i = #brainZ, zc + 1, -1 do brainZ[i] = nil end
+    for i = #brainZPts, zc * 3 + 1, -1 do brainZPts[i] = nil end
+
+    local tc = 0
+    for _, entry in ipairs(HZ.GetTargets()) do
+        if IsValid(entry.ent) and HZ.IsHostile(entry.ent) then
+            local pos = entry.pos
+            tc = tc + 1
+            brainTEnts[tc] = entry.ent
+            local at = tc * 3
+            brainTPts[at - 2], brainTPts[at - 1], brainTPts[at] = pos.x, pos.y, pos.z
+        end
+    end
+
+    for i = #brainTEnts, tc + 1, -1 do brainTEnts[i] = nil end
+    for i = #brainTPts, tc * 3 + 1, -1 do brainTPts[i] = nil end
+
+    local pc = 0
+    for _, ply in ipairs(player.GetAll()) do
+        if IsValid(ply) and ply:Alive() then
+            local pos = ply:GetPos()
+            pc = pc + 1
+            local at = pc * 3
+            brainPPts[at - 2], brainPPts[at - 1], brainPPts[at] = pos.x, pos.y, pos.z
+        end
+    end
+
+    for i = #brainPPts, pc * 3 + 1, -1 do brainPPts[i] = nil end
+
+    local res = HZ.NativeLib.BrainStep(brainZPts, brainTPts, brainPPts, HZ.GetMapBsp and HZ.GetMapBsp() or nil, HZ.CV.sight:GetFloat())
+    local now = CurTime()
+    for i = 1, zc do
+        local z = brainZ[i]
+        local b = (i - 1) * 6
+        z.hz_nSepX = res[b + 1]
+        z.hz_nSepY = res[b + 2]
+        z.hz_nPlyDist = res[b + 3]
+        local tidx = res[b + 4]
+        z.hz_nTgt = tidx > 0 and brainTEnts[tidx] or nil
+        z.hz_nTgtDist = res[b + 5]
+        z.hz_nClear = res[b + 6]
+        z.hz_nStamp = now
+    end
+
+    if t0 then HZ.ProfAdd("sv_brain", SysTime() - t0) end
+end)
 
 hook.Add("InitPostEntity", "hordez_fog_density", FogDensity)
 timer.Create("hordez_fog_density", 10, 0, FogDensity)

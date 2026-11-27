@@ -45,6 +45,7 @@ HZ.CV = {
     flow_prebuild = MakeConVar("hz_flow_prebuild", "1", "Build pathing when the map loads"),
     voices      = MakeConVar("hz_voices", "6", "Voices per second"),
     climb       = MakeConVar("hz_climb", "1", "Climb ledges"),
+    pyramids    = MakeConVar("hz_pyramids", "1", "Pile up to climb tall walls"),
     l4d_director = MakeConVar("hz_l4d_director", "1", "Emulate L4D2 info_director on L4D2 maps"),
     debug       = MakeConVar("hz_debug", "0", "Debug prints"),
     profile     = CreateConVar("hz_profile", "0", FCVAR_REPLICATED, "Profiler overlay"),

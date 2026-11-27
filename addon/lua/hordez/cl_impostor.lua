@@ -511,23 +511,71 @@ local function GatherBucket(bucket, now)
     end
 
     if ready then
-        local posAt = HZ.VirtualAt
-        local vBucket = HZ.VirtualBuckets[bucket]
-        for i = 1, #vBucket do
-            if count >= BUCKET_QUADS then break end
+        if HZ.ClCrowd and HZ.NativeLib and HZ.NativeLib.ClientCrowdGather
+            and HZ.NativeLib.ClientCrowdLen(HZ.ClCrowd) > 0 then
+            local rateArr = {}
+            for v = 0, #VARIANTS - 1 do rateArr[v + 1] = rates[v] or 1 end
+            local farQ, nearQ = HZ.NativeLib.ClientCrowdGather(
+                HZ.ClCrowd, bucket, now, ex, ey, ez, cull and ax or 0, cull and ay or 0,
+                epoch, NEAR_DIST_SQR, BUCKET_QUADS - count, rateArr
+            )
 
-            local row = vBucket[i]
-            local id = row.id
-            local group = row.group
-            local x, y, z = posAt(row, now)
-            local dx, dy, dz = x - ex, y - ey, z - ez
-            local ahead = dx * ax + dy * ay
-            if not cull or ahead >= -CULL_PAD or ahead * ahead <= (dx * dx + dy * dy) * CULL_COS2 then
-                local moving = now < group.t1
-                EmitQuad(bucket, group, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
-                    group.yaw, id, row.female, row.shambler, dx * dx + dy * dy + dz * dz, 1)
+            local function AppendNative(layer, src)
+                local target = layer.buckets[bucket]
+                local quads = target.quads
+                for i = 1, #src, 12 do
+                    local gid = src[i + 11]
+                    local cache = HZ.VirtualGroups[gid]
+                    if not cache then
+                        cache = {}
+                        HZ.VirtualGroups[gid] = cache
+                    end
 
-                count = count + 1
+                    if not cache.hz_ilt or now > cache.hz_ilt then
+                        cache.hz_ilt = now + 2 + (gid % 16) / 16
+                        lightAt:SetUnpacked(src[i], src[i + 1], src[i + 2] + 40)
+                        local light = render.GetLightColor(lightAt)
+                        local lr, lg, lb = light.x, light.y, light.z
+                        if lr + lg + lb < 0.03 then lr, lg, lb = 0.35, 0.35, 0.35 end
+                        cache.hz_ilr, cache.hz_ilg, cache.hz_ilb = lr, lg, lb
+                    end
+
+                    local base = target.count * STRIDE
+                    target.count = target.count + 1
+                    quads[base + 1], quads[base + 2], quads[base + 3] = src[i], src[i + 1], src[i + 2]
+                    quads[base + 4], quads[base + 5] = src[i + 3], src[i + 4]
+                    quads[base + 6], quads[base + 7] = src[i + 5], src[i + 6]
+                    quads[base + 8], quads[base + 9] = src[i + 7], src[i + 8]
+                    quads[base + 10], quads[base + 11] = src[i + 9], src[i + 10]
+                    quads[base + 12] = min(cache.hz_ilr * bright, 255)
+                    quads[base + 13] = min(cache.hz_ilg * bright, 255)
+                    quads[base + 14] = min(cache.hz_ilb * bright, 255)
+                    quads[base + 15] = 255
+                    count = count + 1
+                end
+            end
+
+            AppendNative(farLayer, farQ)
+            AppendNative(nearLayer, nearQ)
+        else
+            local posAt = HZ.VirtualAt
+            local vBucket = HZ.VirtualBuckets[bucket]
+            for i = 1, #vBucket do
+                if count >= BUCKET_QUADS then break end
+
+                local row = vBucket[i]
+                local id = row.id
+                local group = row.group
+                local x, y, z = posAt(row, now)
+                local dx, dy, dz = x - ex, y - ey, z - ez
+                local ahead = dx * ax + dy * ay
+                if not cull or ahead >= -CULL_PAD or ahead * ahead <= (dx * dx + dy * dy) * CULL_COS2 then
+                    local moving = now < group.t1
+                    EmitQuad(bucket, group, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
+                        group.yaw, id, row.female, row.shambler, dx * dx + dy * dy + dz * dz, 1)
+
+                    count = count + 1
+                end
             end
         end
 
@@ -728,8 +776,11 @@ hook.Add("PostDrawOpaqueRenderables", "hordez_impostors", function(depth, sky, s
     if depth or sky or sky3d then return end
 
     local now = CurTime()
-    if SHADER_OK and not ready and not bakeAt
-        and ((impOn and #HZ.ClientZombies > 0) or next(HZ.VirtualCl) or #HZ.VirtualClusters > 0) then
+    local hasVirt = next(HZ.VirtualCl) ~= nil or #HZ.VirtualClusters > 0
+        or (HZ.ClCrowd ~= nil and HZ.NativeLib ~= nil and HZ.NativeLib.ClientCrowdLen ~= nil
+            and HZ.NativeLib.ClientCrowdLen(HZ.ClCrowd) > 0)
+
+    if SHADER_OK and not ready and not bakeAt and ((impOn and #HZ.ClientZombies > 0) or hasVirt) then
         if not LoadCache() then StartBake() end
     end
 

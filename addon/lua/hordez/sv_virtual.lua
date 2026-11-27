@@ -1,4 +1,5 @@
 util.AddNetworkString("hz_virt")
+util.AddNetworkString("hz_virt_bin")
 util.AddNetworkString("hz_virt_sync")
 util.AddNetworkString("hz_zoom")
 util.AddNetworkString("hz_clusters")
@@ -202,17 +203,127 @@ local function WriteList(list, write, blocked)
     return Slice(list, count + 1)
 end
 
-local function FlushNet()
-    while #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0 or #pendMove > 0 do
-        net.Start("hz_virt")
-        pendDel = WriteList(pendDel, WriteRowDel, false)
-        pendGroupDel = WriteList(pendGroupDel, WriteGroupDel, #pendDel > 0)
-        pendGroupAdd = WriteList(pendGroupAdd, WriteGroupAdd, #pendDel > 0 or #pendGroupDel > 0)
-        pendAdd = WriteList(pendAdd, WriteRowAdd, #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0)
-        pendMove = WriteList(pendMove, WriteGroupMove,
-            #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0)
+local binDels, binGdels, binGadds, binRadds, binGmovs = {}, {}, {}, {}, {}
 
-        net.Broadcast()
+local function ClearTable(tbl)
+    for i = #tbl, 1, -1 do tbl[i] = nil end
+end
+
+local function TakeChunk(list, blocked)
+    local total = #list
+    if blocked or total == 0 then return nil, 0, list end
+
+    local count = min(total, CHUNK)
+    if count >= total then return list, count, {} end
+
+    return list, count, Slice(list, count + 1)
+end
+
+local function SendBinChunk(binPlys, dels, dc, gdels, gdc, gadds, gac, radds, rac, gmovs, gmc)
+    ClearTable(binDels)
+    ClearTable(binGdels)
+    ClearTable(binGadds)
+    ClearTable(binRadds)
+    ClearTable(binGmovs)
+    for i = 1, dc do
+        local e = dels[i]
+        binDels[#binDels + 1] = rshift(e, 1)
+        binDels[#binDels + 1] = band(e, 1)
+    end
+
+    for i = 1, gdc do binGdels[i] = gdels[i] end
+    for i = 1, gac do
+        local g = gadds[i]
+        g._pendAdd = nil
+        local at = #binGadds
+        binGadds[at + 1] = g.id
+        binGadds[at + 2] = ClampCoord(g.x)
+        binGadds[at + 3] = ClampCoord(g.y)
+        binGadds[at + 4] = ClampCoord(g.z)
+        binGadds[at + 5] = min(floor(g.speed), 1023)
+    end
+
+    for i = 1, rac do
+        local r = radds[i]
+        r._pendAdd = nil
+        local at = #binRadds
+        binRadds[at + 1] = r.id
+        binRadds[at + 2] = r.group.id
+        binRadds[at + 3] = max(-255, min(255, floor(r.ox + 0.5)))
+        binRadds[at + 4] = max(-255, min(255, floor(r.oy + 0.5)))
+        binRadds[at + 5] = (r.female and 1 or 0) + (r.shambler and 2 or 0)
+    end
+
+    for i = 1, gmc do
+        local g = gmovs[i]
+        g._pendMove = nil
+        local at = #binGmovs
+        binGmovs[at + 1] = g.id
+        binGmovs[at + 2] = ClampCoord(g.wx)
+        binGmovs[at + 3] = ClampCoord(g.wy)
+        binGmovs[at + 4] = ClampCoord(g.wz)
+    end
+
+    local bytes = HZ.NativeLib.PackVirt(binDels, binGdels, binGadds, binRadds, binGmovs)
+    net.Start("hz_virt_bin")
+    net.WriteUInt(#bytes, 16)
+    net.WriteData(bytes, #bytes)
+    net.Send(binPlys)
+end
+
+local function FlushNet()
+    local useBin = HZ.NativeOn() and HZ.NativeLib.PackVirt ~= nil
+    local binPlys, luaPlys
+    if useBin then
+        binPlys, luaPlys = {}, {}
+        for _, ply in ipairs(player.GetAll()) do
+            if ply.hz_clNative then
+                binPlys[#binPlys + 1] = ply
+            else
+                luaPlys[#luaPlys + 1] = ply
+            end
+        end
+
+        if #binPlys == 0 then useBin = false end
+    end
+
+    while #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0 or #pendMove > 0 do
+        if useBin then
+            local dels, dc, remDel = TakeChunk(pendDel, false)
+            local gdels, gdc, remGdel = TakeChunk(pendGroupDel, #remDel > 0)
+            local gadds, gac, remGadd = TakeChunk(pendGroupAdd, #remDel > 0 or #remGdel > 0)
+            local radds, rac, remAdd = TakeChunk(pendAdd, #remDel > 0 or #remGdel > 0 or #remGadd > 0)
+            local gmovs, gmc, remMove = TakeChunk(pendMove,
+                #remDel > 0 or #remGdel > 0 or #remGadd > 0 or #remAdd > 0)
+
+            SendBinChunk(binPlys, dels, dc, gdels, gdc, gadds, gac, radds, rac, gmovs, gmc)
+            if #luaPlys > 0 then
+                net.Start("hz_virt")
+                net.WriteUInt(dc, 16)
+                for i = 1, dc do WriteRowDel(dels[i]) end
+                net.WriteUInt(gdc, 16)
+                for i = 1, gdc do WriteGroupDel(gdels[i]) end
+                net.WriteUInt(gac, 16)
+                for i = 1, gac do WriteGroupAdd(gadds[i]) end
+                net.WriteUInt(rac, 16)
+                for i = 1, rac do WriteRowAdd(radds[i]) end
+                net.WriteUInt(gmc, 16)
+                for i = 1, gmc do WriteGroupMove(gmovs[i]) end
+                net.Send(luaPlys)
+            end
+
+            pendDel, pendGroupDel, pendGroupAdd, pendAdd, pendMove = remDel, remGdel, remGadd, remAdd, remMove
+        else
+            net.Start("hz_virt")
+            pendDel = WriteList(pendDel, WriteRowDel, false)
+            pendGroupDel = WriteList(pendGroupDel, WriteGroupDel, #pendDel > 0)
+            pendGroupAdd = WriteList(pendGroupAdd, WriteGroupAdd, #pendDel > 0 or #pendGroupDel > 0)
+            pendAdd = WriteList(pendAdd, WriteRowAdd, #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0)
+            pendMove = WriteList(pendMove, WriteGroupMove,
+                #pendDel > 0 or #pendGroupDel > 0 or #pendGroupAdd > 0 or #pendAdd > 0)
+
+            net.Broadcast()
+        end
     end
 
     rowIds:Settle()
@@ -1494,6 +1605,7 @@ end
 
 net.Receive("hz_virt_sync", function(_, ply)
     local now = CurTime()
+    ply.hz_clNative = net.ReadBool()
     if (ply.hz_virtSync or 0) > now then return end
 
     ply.hz_virtSync = now + 5

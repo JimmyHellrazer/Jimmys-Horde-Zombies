@@ -2,6 +2,9 @@ HZ.VirtualCl = HZ.VirtualCl or {}
 HZ.VirtualGroups = HZ.VirtualGroups or {}
 HZ.VirtualBuckets = HZ.VirtualBuckets or {}
 HZ.VirtualClusters = HZ.VirtualClusters or {}
+if not HZ.ClCrowd and HZ.NativeOn and HZ.NativeOn() and HZ.NativeLib and HZ.NativeLib.ClientCrowd then
+    HZ.ClCrowd = HZ.NativeLib.ClientCrowd(65000, 65000)
+end
 local BUCKETS = 32
 for b = 0, BUCKETS - 1 do HZ.VirtualBuckets[b] = HZ.VirtualBuckets[b] or {} end
 local rows, groups, buckets = HZ.VirtualCl, HZ.VirtualGroups, HZ.VirtualBuckets
@@ -135,8 +138,27 @@ net.Receive("hz_clusters", function()
     for i = #clusters, count + 1, -1 do clusters[i] = nil end
 end)
 
+net.Receive("hz_virt_bin", function()
+    local len = net.ReadUInt(16)
+    local data = net.ReadData(len)
+    if not HZ.ClCrowd or not HZ.NativeLib or not HZ.NativeLib.ClientCrowdApply then return end
+
+    local blood = HZ.NativeLib.ClientCrowdApply(HZ.ClCrowd, data, CurTime())
+    for i = 1, #blood, 3 do
+        bloodAt:SetUnpacked(blood[i], blood[i + 1], blood[i + 2])
+        local effect = EffectData()
+        effect:SetOrigin(bloodAt)
+        effect:SetNormal(vector_up)
+        effect:SetColor(BLOOD_COLOR_RED)
+        effect:SetScale(1)
+        effect:SetFlags(3)
+        util.Effect("BloodImpact", effect, true, true)
+    end
+end)
+
 local function RequestSync()
     net.Start("hz_virt_sync")
+    net.WriteBool(HZ.ClCrowd ~= nil)
     net.SendToServer()
 end
 
@@ -146,6 +168,10 @@ if IsValid(LocalPlayer and LocalPlayer()) then RequestSync() end
 hook.Add("PostCleanupMap", "hordez_virtual", function()
     for id in pairs(rows) do rows[id] = nil end
     for id in pairs(groups) do groups[id] = nil end
+    if HZ.ClCrowd and HZ.NativeLib and HZ.NativeLib.ClientCrowdClear then
+        HZ.NativeLib.ClientCrowdClear(HZ.ClCrowd)
+    end
+
     local clusters = HZ.VirtualClusters
     for i = #clusters, 1, -1 do clusters[i] = nil end
     for b = 0, BUCKETS - 1 do

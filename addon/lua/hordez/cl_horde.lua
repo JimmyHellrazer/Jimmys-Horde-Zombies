@@ -275,6 +275,12 @@ local function ReleaseDeathModel(csm, mdl, kicks)
 
     StopBurn(csm)
     csm.hz_death = nil
+    csm.RenderOverride = nil
+    if IsValid(csm.hz_overlay) then
+        csm.hz_overlay:Remove()
+        csm.hz_overlay = nil
+    end
+
     if kicks then
         for bone in pairs(kicks) do csm:ManipulateBoneAngles(bone, angle_zero) end
     end
@@ -325,7 +331,8 @@ local function FinishDeath(death)
         end
     end
 
-    local rag = MakeRagdoll(death.csm, death.mdl, death.skin, death.groups, vector_origin, vector_origin, vels)
+    local rag = MakeRagdoll(death.csm, death.custom or death.mdl, death.custom and 0 or death.skin,
+        death.custom and {} or death.groups, vector_origin, vector_origin, vels)
     if IsValid(rag) then HZ.MoveBurn(death.csm, rag) end
     ReleaseDeathModel(death.csm, death.mdl, death.kicks)
     death.csm = nil
@@ -412,7 +419,7 @@ local function AcquireDeathModel(mdl)
     return ClientsideModel(mdl, RENDERGROUP_OPAQUE)
 end
 
-local function StartDeath(ent, kind, dir, groups, vel)
+local function StartDeath(ent, kind, dir, groups, vel, custom)
     if not deathAnims:GetBool() or kind == HZ.DEATH_RAGDOLL or #dying >= deathMax:GetInt() then return false end
     if ent:GetPos():DistToSqr(EyePos()) > deathDist:GetFloat() ^ 2 then return false end
 
@@ -424,6 +431,14 @@ local function StartDeath(ent, kind, dir, groups, vel)
     local t0 = HZ.ProfOn and SysTime()
     local deathModel = AcquireDeathModel(mdl)
     if not IsValid(deathModel) then return false end
+
+    if custom then
+        deathModel.RenderOverride = function(self, flags)
+            HZ.DrawCustom(self, custom, flags)
+        end
+    else
+        deathModel.RenderOverride = nil
+    end
 
     deathModel:SetSkin(ent:GetSkin())
     deathModel:SetColor(ent:GetColor())
@@ -460,7 +475,7 @@ local function StartDeath(ent, kind, dir, groups, vel)
 
     local bones, pelvisAt = TrackedBones(deathModel, mdl)
     dying[#dying + 1] = {
-        csm = deathModel, mdl = mdl, skin = ent:GetSkin(), groups = groups,
+        csm = deathModel, mdl = mdl, custom = custom, skin = ent:GetSkin(), groups = groups,
         t0 = CurTime(), dur = dur, stop = stop, dt = 0, nextStep = 0, lastSample = CurTime(),
         seq = pick.id, lastCyc = 0, yaw = Angle(0, ent:GetAngles().y, 0),
         carry = Vector(vel.x, vel.y, 0) * ((kind == HZ.DEATH_SHOTGUN and 0.15)
@@ -648,7 +663,7 @@ net.Receive("hz_rag", function()
     for i = 0, ent:GetNumBodyGroups() - 1 do groups[i] = ent:GetBodygroup(i) end
     local body
     local custom = ent.hz_custom
-    if not custom and StartDeath(ent, kind, dir, groups, vel) then
+    if StartDeath(ent, kind, dir, groups, vel, custom) then
         body = dying[#dying].csm
     else
         local push = force * 0.012

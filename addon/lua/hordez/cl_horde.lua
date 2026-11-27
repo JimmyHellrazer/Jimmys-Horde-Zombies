@@ -276,7 +276,9 @@ local function ReleaseDeathModel(csm, mdl, kicks)
     StopBurn(csm)
     csm.hz_death = nil
     csm.RenderOverride = nil
-    if IsValid(csm.hz_overlay) then
+    if HZ.ReleaseOverlay then
+        HZ.ReleaseOverlay(csm)
+    elseif IsValid(csm.hz_overlay) then
         csm.hz_overlay:Remove()
         csm.hz_overlay = nil
     end
@@ -416,7 +418,10 @@ local function AcquireDeathModel(mdl)
         end
     end
 
-    return ClientsideModel(mdl, RENDERGROUP_OPAQUE)
+    local csm = ClientsideModel(mdl, RENDERGROUP_OPAQUE)
+    if IsValid(csm) then csm:SetIK(false) end
+
+    return csm
 end
 
 local function StartDeath(ent, kind, dir, groups, vel, custom)

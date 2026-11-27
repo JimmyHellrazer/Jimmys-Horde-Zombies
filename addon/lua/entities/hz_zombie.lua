@@ -36,7 +36,8 @@ if CLIENT then
     function ENT:Draw(flags)
         if self.hz_ragdolled or self.hz_far or (self.hz_imp and (self.hz_fade or 1) >= 1) then return end
 
-        if flags and depthDistSqr > 0 and band(flags, SHADOW_DEPTH) ~= 0 and (self.hz_d2 or 0) > depthDistSqr then
+        if flags and band(flags, SHADOW_DEPTH) ~= 0
+            and (self.hz_shadow == false or (depthDistSqr > 0 and (self.hz_d2 or 0) > depthDistSqr)) then
             return
         end
 

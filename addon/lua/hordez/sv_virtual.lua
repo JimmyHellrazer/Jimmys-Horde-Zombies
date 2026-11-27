@@ -1275,6 +1275,103 @@ net.Receive("hz_virt_sync", function(_, ply)
     end
 end)
 
+local VEH_MIN_SPEED_SQR = 200 * 200
+local VEH_HIT_RAD = 110
+local VEH_REAL_MAX = 4
+local drivers, driverCount = {}, 0
+
+local function SweepVehicle(ply, veh, now)
+    local mover = veh
+    local parent = veh:GetParent()
+    if IsValid(parent) then mover = parent end
+
+    local vel = mover:GetVelocity()
+    local speedSqr = vel:LengthSqr()
+    if speedSqr < 1 then
+        local phys = mover:GetPhysicsObject()
+        if IsValid(phys) then
+            vel = phys:GetVelocity()
+            speedSqr = vel:LengthSqr()
+        end
+    end
+
+    if speedSqr < VEH_MIN_SPEED_SQR then return false end
+
+    local center = mover:GetPos()
+    local rad = max(VEH_HIT_RAD, mover:BoundingRadius() * 0.55)
+    local radSqr = rad * rad
+    local groupRadSqr = (rad + GROUP_RADIUS) * (rad + GROUP_RADIUS)
+    local speed = sqrt(speedSqr)
+    local force = Vector(vel.x * 120, vel.y * 120, vel.z * 120 + speed * 30)
+    local shown, hitAny = 0, false
+
+    for g = #groupArr, 1, -1 do
+        local group = groupArr[g]
+        if group and group.count > 0 then
+            local gx, gy, gz = PosAt(group, now)
+            local gdx, gdy, gdz = gx - center.x, gy - center.y, gz - center.z
+            if gdx * gdx + gdy * gdy + gdz * gdz < groupRadSqr then
+                for _, row in pairs(group.rows) do
+                    local x, y, z = gx + row.ox, gy + row.oy, gz
+                    local dx, dy, dz = x - center.x, y - center.y, z - center.z
+                    if dx * dx + dy * dy + dz * dz < radSqr then
+                        hitAny = true
+                        if shown < VEH_REAL_MAX then
+                            shown = shown + 1
+                            HitAsReal(row, x, y, z, ply, mover, 500, DMG_VEHICLE, force, true)
+                        else
+                            DropRow(row, true)
+                            DeathNotice(ply, mover)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return hitAny
+end
+
+local function StepVehicleSweep()
+    if driverCount == 0 or HZ.VCount == 0 then return end
+
+    local now = CurTime()
+    local dirty = false
+    for ply, veh in pairs(drivers) do
+        if not IsValid(ply) or not ply:InVehicle() or not IsValid(veh) then
+            drivers[ply] = nil
+            driverCount = driverCount - 1
+        elseif SweepVehicle(ply, veh, now) then
+            dirty = true
+        end
+    end
+
+    if dirty then FlushNet() end
+    if driverCount <= 0 then
+        driverCount = 0
+        timer.Remove("hordez_virtual_veh")
+    end
+end
+
+hook.Add("PlayerEnteredVehicle", "hordez_virtual_veh", function(ply, veh)
+    if not IsValid(ply) or not IsValid(veh) then return end
+
+    if not drivers[ply] then driverCount = driverCount + 1 end
+    drivers[ply] = veh
+    if driverCount == 1 then timer.Create("hordez_virtual_veh", 0.1, 0, StepVehicleSweep) end
+end)
+
+local function DropDriver(ply)
+    if not drivers[ply] then return end
+
+    drivers[ply] = nil
+    driverCount = max(driverCount - 1, 0)
+    if driverCount == 0 then timer.Remove("hordez_virtual_veh") end
+end
+
+hook.Add("PlayerLeaveVehicle", "hordez_virtual_veh", DropDriver)
+hook.Add("PlayerDisconnected", "hordez_virtual_veh", DropDriver)
+
 hook.Add("PostCleanupMap", "hordez_virtual", HZ.ClearVirtual)
 cvars.AddChangeCallback("hz_virtual", function(_, _, new)
     if not tobool(new) then HZ.ClearVirtual() end

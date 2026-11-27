@@ -2411,3 +2411,82 @@ end
 
 function ENT:OnUnStuck()
 end
+
+local VEH_SPEED_SQR = 180 * 180
+local PROP_SPEED_SQR = 220 * 220
+local CRUSH_MIN_MASS = 15
+local crushDmg = DamageInfo()
+
+local function IsVehicleEnt(ent)
+    return ent:IsVehicle() or ent.IsSimfphyscar == true or ent.LVS == true or ent.IsGlideVehicle == true
+end
+
+local function VehicleDriver(veh)
+    if veh.GetDriver then
+        local driver = veh:GetDriver()
+        if IsValid(driver) then return driver end
+    end
+
+    if IsValid(veh.Driver) then return veh.Driver end
+
+    return nil
+end
+
+function ENT:OnContact(ent)
+    if self.hz_dead or not IsValid(ent) or ent:IsWorld() or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then
+        return
+    end
+
+    local now = CurTime()
+    if now < (self.hz_nextCrush or 0) then return end
+
+    local mover = ent
+    local parent = ent:GetParent()
+    if IsValid(parent) and IsVehicleEnt(parent) then mover = parent end
+
+    local isVeh = IsVehicleEnt(mover)
+    local vel = mover:GetVelocity()
+    local speedSqr = vel:LengthSqr()
+    local phys = mover:GetPhysicsObject()
+    if speedSqr < 1 and IsValid(phys) then
+        vel = phys:GetVelocity()
+        speedSqr = vel:LengthSqr()
+    end
+
+    local minSqr = isVeh and VEH_SPEED_SQR or PROP_SPEED_SQR
+    if speedSqr < minSqr then return end
+
+    local mass = IsValid(phys) and phys:GetMass() or 0
+    if not isVeh and mass < CRUSH_MIN_MASS then return end
+
+    local pos = self:GetPos()
+    local mpos = mover:GetPos()
+    if (pos.x - mpos.x) * vel.x + (pos.y - mpos.y) * vel.y + (pos.z - mpos.z) * vel.z <= 0 then return end
+
+    local speed = math.sqrt(speedSqr)
+    local amount
+    if isVeh then
+        amount = (speed - 120) * 0.6 * math.Clamp(mass / 500, 0.8, 3)
+    else
+        amount = (speed - 180) * 0.25 * math.Clamp(mass / 40, 0.4, 4)
+    end
+
+    if amount < 12 then return end
+
+    local attacker = isVeh and VehicleDriver(mover) or nil
+    if not attacker and mover.GetPhysicsAttacker then
+        local pa = mover:GetPhysicsAttacker(5)
+        if IsValid(pa) then attacker = pa end
+    end
+
+    self.hz_nextCrush = now + 0.25
+    crushDmg:SetDamage(amount)
+    crushDmg:SetDamageType(isVeh and DMG_VEHICLE or DMG_CRUSH)
+    crushDmg:SetAttacker(attacker or mover)
+    crushDmg:SetInflictor(mover)
+    crushDmg:SetDamagePosition(self:WorldSpaceCenter())
+    local forceScale = math.Clamp(mass, 40, 400) * 1.5
+    crushDmg:SetDamageForce(Vector(vel.x * forceScale, vel.y * forceScale, vel.z * forceScale + speed * 25))
+    self:EmitSound("physics/body/body_medium_impact_hard" .. math.random(1, 6) .. ".wav", 75, math.random(92, 108), 0.7)
+    self:TakeDamageInfo(crushDmg)
+end

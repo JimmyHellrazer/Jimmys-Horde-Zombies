@@ -237,7 +237,7 @@ end
 
 function ENT:Cue()
     net.Start("hz_cue")
-    net.WriteString("hordez/mega_mob_incoming.wav")
+    net.WriteString("hordez/mega_mob_incoming.ogg")
     net.Broadcast()
 end
 

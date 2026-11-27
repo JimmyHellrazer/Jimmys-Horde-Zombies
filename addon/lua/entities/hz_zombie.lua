@@ -2027,7 +2027,18 @@ function ENT:HZ_TryClimb(toward)
     self.loco:SetGravity(gravity)
     if self.hz_dead then return true end
 
-    if self:GetPos():DistToSqr(land) > 18 * 18 then self:SetPos(land + Vector(0, 0, 2)) end
+    local now = self:GetPos()
+    local stuck = util.TraceHull({ start = now + Vector(0, 0, 2), endpos = now + Vector(0, 0, 3),
+        mins = Vector(-12, -12, 0), maxs = Vector(12, 12, 70), mask = MASK_NPCSOLID, filter = filter })
+
+    if stuck.Hit or stuck.StartSolid or now:DistToSqr(land) > 18 * 18 then
+        local dest = land + Vector(0, 0, 2)
+        local landChk = util.TraceHull({ start = dest, endpos = dest + Vector(0, 0, 1),
+            mins = Vector(-12, -12, 0), maxs = Vector(12, 12, 70), mask = MASK_NPCSOLID, filter = filter })
+
+        if landChk.Hit or landChk.StartSolid then dest = HZ.FreeSpot(land) end
+        self:SetPos(dest)
+    end
     self.hz_ownMove = engine.TickCount()
     self.loco:ClearStuck()
     self.hz_nextBrain = 0
@@ -2084,11 +2095,11 @@ function ENT:HZ_TryVault(toward)
         if landTr.Hit and not landTr.StartSolid and landTr.HitPos.z <= pos.z + 20 and landTr.HitNormal.z > 0.7 then
             local room = util.TraceHull({ start = landTr.HitPos + Vector(0, 0, 2),
                 endpos = landTr.HitPos + Vector(0, 0, 3),
-                mins = Vector(-12, -12, 0), maxs = Vector(12, 12, 60), mask = MASK_NPCSOLID, filter = filter })
+                mins = Vector(-13, -13, 0), maxs = Vector(13, 13, 72), mask = MASK_NPCSOLID, filter = filter })
 
             local over = util.TraceHull({ start = pos + Vector(0, 0, height + 6),
                 endpos = Vector(probe.x, probe.y, pos.z + height + 6),
-                mins = Vector(-10, -10, 0), maxs = Vector(10, 10, 30), mask = MASK_NPCSOLID, filter = filter })
+                mins = Vector(-11, -11, 0), maxs = Vector(11, 11, 40), mask = MASK_NPCSOLID, filter = filter })
 
             if not room.Hit and not room.StartSolid and not over.Hit and not over.StartSolid then
                 land = landTr.HitPos
@@ -2122,8 +2133,16 @@ function ENT:HZ_TryVault(toward)
     if self.hz_dead then return true end
 
     local now = self:GetPos()
-    if Vector(now.x - land.x, now.y - land.y, 0):LengthSqr() > 18 * 18 then
-        self:SetPos(Vector(land.x, land.y, math.max(now.z, land.z + 2)))
+    local stuck = util.TraceHull({ start = now + Vector(0, 0, 2), endpos = now + Vector(0, 0, 3),
+        mins = Vector(-12, -12, 0), maxs = Vector(12, 12, 70), mask = MASK_NPCSOLID, filter = filter })
+
+    if stuck.Hit or stuck.StartSolid or Vector(now.x - land.x, now.y - land.y, 0):LengthSqr() > 14 * 14 then
+        local dest = Vector(land.x, land.y, math.max(now.z, land.z + 2))
+        local landChk = util.TraceHull({ start = dest, endpos = dest + Vector(0, 0, 1),
+            mins = Vector(-12, -12, 0), maxs = Vector(12, 12, 70), mask = MASK_NPCSOLID, filter = filter })
+
+        if landChk.Hit or landChk.StartSolid then dest = HZ.FreeSpot(land) end
+        self:SetPos(dest)
     elseif now.z < land.z then
         self:SetPos(Vector(now.x, now.y, land.z + 2))
     end

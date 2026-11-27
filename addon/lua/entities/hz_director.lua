@@ -56,13 +56,13 @@ end
 
 if CLIENT then
     function ENT:Draw()
-        if not HZ.MarkersVisible() then return end
+        if self:GetNW2Bool("hz_hidden") or not HZ.MarkersVisible() then return end
 
         self:DrawModel()
     end
 
     function ENT:DrawTranslucent()
-        if not HZ.MarkersVisible() then return end
+        if self:GetNW2Bool("hz_hidden") or not HZ.MarkersVisible() then return end
 
         local pos = self:GetPos() + Vector(0, 0, 34)
         local ang = Angle(0, LocalPlayer():EyeAngles().y - 90, 90)
@@ -158,10 +158,10 @@ function ENT:MaintainAmbient()
     end
 end
 
-function ENT:StartHorde()
+function ENT:StartHorde(size)
     local now = CurTime()
     self.phase = "peak"
-    self.hordeLeft = self:GetHordeSize()
+    self.hordeLeft = size or self:GetHordeSize()
     self.hordeTotal = self.hordeLeft
     self.hordeSpawned = {}
     self.peakEnd = now + 60
@@ -298,10 +298,14 @@ function ENT:Think()
     end
 
     if self.phase == "buildup" then
-        if self:GetNextHorde() <= 0 then self:SetNextHorde(now + RandRange(self:GetHordeMin(), self:GetHordeMax())) end
-        if HZ.Stress > 40 then self:SetNextHorde(self:GetNextHorde() + 0.5) end
-        self:MaintainAmbient()
-        if now >= self:GetNextHorde() and self:GetHordeSize() > 0 then self:StartHorde() end
+        if self.onslaught then
+            self:StartHorde()
+        else
+            if self:GetNextHorde() <= 0 then self:SetNextHorde(now + RandRange(self:GetHordeMin(), self:GetHordeMax())) end
+            if HZ.Stress > 40 then self:SetNextHorde(self:GetNextHorde() + 0.5) end
+            self:MaintainAmbient()
+            if now >= self:GetNextHorde() and self:GetHordeSize() > 0 then self:StartHorde() end
+        end
     elseif self.phase == "peak" then
         self:SpawnHordeBatch()
         local alive = HZ.VirtualOwnedHorde(self)
@@ -313,12 +317,16 @@ function ENT:Think()
             end
         end
 
-        if self.hordeLeft <= 0 and (alive <= math.ceil(self.hordeTotal * 0.25) or now > self.peakEnd) then
+        local finished = (self.hordeLeft <= 0 and (alive <= math.ceil(self.hordeTotal * 0.25) or now > self.peakEnd))
+            or now > self.peakEnd + 30
+        if finished then
             self.phase = "relax"
-            self.relaxEnd = now + self:GetRelaxTime()
-        elseif now > self.peakEnd + 30 then
-            self.phase = "relax"
-            self.relaxEnd = now + self:GetRelaxTime()
+            self.relaxEnd = now + (self.onslaught and 6 or self:GetRelaxTime())
+            if self.onPanicFinished then
+                local cb = self.onPanicFinished
+                self.onPanicFinished = nil
+                cb()
+            end
         end
     elseif self.phase == "relax" then
         if now >= (self.relaxEnd or 0) then

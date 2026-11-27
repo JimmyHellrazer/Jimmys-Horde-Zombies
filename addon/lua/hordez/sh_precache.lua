@@ -37,8 +37,64 @@ function HZ.PrecacheModel(path)
     seen[path] = true
     if done then
         util.PrecacheModel(path)
+        if CLIENT and HZ.WarmModel then HZ.WarmModel(path) end
     else
         models[#models + 1] = path
+    end
+end
+
+if CLIENT then
+    local warmQueue, warmSeen = {}, {}
+    local warmRt
+    local warmPos, warmCam, warmAng = Vector(0, 0, 0), Vector(-80, 0, 36), Angle(0, 0, 0)
+    local warmHooked = false
+
+    local function StepWarm(depth, sky, sky3d)
+        if depth or sky or sky3d then return end
+
+        local n = #warmQueue
+        if n == 0 then
+            hook.Remove("PostDrawOpaqueRenderables", "hordez_warm_models")
+            warmHooked = false
+            return
+        end
+
+        local path = warmQueue[n]
+        warmQueue[n] = nil
+        if not path or path == "" then return end
+
+        util.PrecacheModel(path)
+        local ent = ClientsideModel(path, RENDERGROUP_OPAQUE)
+        if not IsValid(ent) then return end
+
+        warmRt = warmRt or GetRenderTarget("hordez_warm_rt", 16, 16)
+        ent:SetNoDraw(true)
+        ent:SetPos(warmPos)
+        ent:SetAngles(warmAng)
+        ent:SetLOD(0)
+        ent:SetupBones()
+
+        render.PushRenderTarget(warmRt)
+        render.Clear(0, 0, 0, 0, true, true)
+        cam.Start3D(warmCam, warmAng, 60, 0, 0, 16, 16, 4, 256)
+        render.SuppressEngineLighting(true)
+        ent:DrawModel()
+        render.SuppressEngineLighting(false)
+        cam.End3D()
+        render.PopRenderTarget()
+
+        ent:Remove()
+    end
+
+    function HZ.WarmModel(path)
+        if not path or path == "" or warmSeen[path] then return end
+
+        warmSeen[path] = true
+        warmQueue[#warmQueue + 1] = path
+        if not warmHooked then
+            warmHooked = true
+            hook.Add("PostDrawOpaqueRenderables", "hordez_warm_models", StepWarm)
+        end
     end
 end
 
@@ -48,7 +104,11 @@ function HZ.Precache()
     done = true
     local t0 = SysTime()
     GrowModelCache()
-    for i = 1, #models do util.PrecacheModel(models[i]) end
+    for i = 1, #models do
+        util.PrecacheModel(models[i])
+        if CLIENT and HZ.WarmModel then HZ.WarmModel(models[i]) end
+    end
+
     for i = 1, #sounds do util.PrecacheSound(sounds[i]) end
     if HZ.CV.debug:GetBool() then
         print(("[hordez] precached %d models and %d sounds in %.0f ms"):format(#models, #sounds,

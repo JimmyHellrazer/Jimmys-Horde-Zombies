@@ -56,22 +56,22 @@ end
 
 local FACE_DIST_SQR = FACE_DIST * FACE_DIST
 
-local function WantedLook(ent, eye)
-    if ent.hz_ragdolled or ent:IsDormant() or not ent:GetNW2Bool("hz_alerted") then return nil end
-    if ent:GetPos():DistToSqr(eye) > FACE_DIST_SQR then return nil end
+local function WantedLook(ent)
+    if ent.hz_ragdolled or ent.hz_imp or ent.hz_far or ent:IsDormant() or (ent.hz_lod or 0) >= 2 then return nil end
+    if not ent.hz_d2 or ent.hz_d2 > FACE_DIST_SQR then return nil end
+    if not ent:GetNW2Bool("hz_alerted") then return nil end
 
     return ent:GetNW2Bool("hz_shambler") and "dead" or "rage"
 end
 
 timer.Create("hordez_faces", 0.25, 0, function()
     local on = cvOn:GetBool()
-    local eye = EyePos()
     local now = CurTime()
     local list = HZ.ClientZombies
     for i = 1, #list do
         local ent = list[i]
         if IsValid(ent) then
-            local look = on and WantedLook(ent, eye) or nil
+            local look = on and WantedLook(ent) or nil
             HZ.SetFace(ent, look)
             if look and ent:GetNW2Float("hz_yell", 0) > now then
                 ent.hz_jawId = FlexIds(ent).jaw_drop

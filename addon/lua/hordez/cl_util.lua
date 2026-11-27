@@ -373,6 +373,7 @@ timer.Create("hordez_scope_zoom", 0.2, 0, function()
     end
 end)
 
+local SHADOW_SKIP = bit.bor(EF_NOSHADOW, EF_NORECEIVESHADOW)
 local camPos, camAim, camFrame = Vector(), Vector(1, 0, 0), -10
 hook.Add("PreDrawOpaqueRenderables", "hordez_cam", function(depth, sky, sky3d)
     if depth or sky or sky3d then return end
@@ -415,7 +416,7 @@ timer.Create("hordez_detail", 0.25, 0, function()
         local ent = list[i]
         if IsValid(ent) and not ent.hz_ragdolled then
             if ent:IsDormant() then
-                ent.hz_lod, ent.hz_shadow, ent.hz_d2, ent.hz_cover = nil, nil, nil, nil
+                ent.hz_lod, ent.hz_shadow, ent.hz_d2, ent.hz_cover, ent.hz_ik = nil, nil, nil, nil, nil
                 ent.hz_dormant = true
             else
                 local pos = ent:GetPos()
@@ -438,6 +439,13 @@ timer.Create("hordez_detail", 0.25, 0, function()
                 if refresh or ent.hz_lod ~= want then
                     ent.hz_lod = want
                     ent:SetLOD(want)
+                    if IsValid(ent.hz_overlay) then ent.hz_overlay:SetLOD(want) end
+                end
+
+                local wantIk = want <= 0 and covered < 1.5 and not ent.hz_imp
+                if refresh or ent.hz_ik ~= wantIk then
+                    ent.hz_ik = wantIk
+                    ent:SetIK(wantIk)
                 end
 
                 local shadow = (secondDist < 0 or distSqr < shadowDistSqr) and not ent.hz_imp
@@ -447,8 +455,10 @@ timer.Create("hordez_detail", 0.25, 0, function()
                     ent.hz_shadow = shadow
                     ent:DrawShadow(shadow)
                     if shadow then
+                        ent:RemoveEffects(SHADOW_SKIP)
                         ent:CreateShadow()
                     else
+                        ent:AddEffects(SHADOW_SKIP)
                         ent:DestroyShadow()
                     end
                 end

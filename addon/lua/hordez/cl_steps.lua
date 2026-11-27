@@ -26,8 +26,8 @@ local SURF = {
 
 local SND = { run = {}, walk = {} }
 for gait, sets in pairs(SND) do
-    for _, fileName in ipairs(file.Find("sound/hordez/footsteps/" .. gait .. "/*.wav", "GAME")) do
-        local surf = fileName:gsub("%d*%.wav$", "")
+    for _, fileName in ipairs(file.Find("sound/hordez/footsteps/" .. gait .. "/*.ogg", "GAME")) do
+        local surf = fileName:gsub("%d*%.ogg$", "")
         sets[surf] = sets[surf] or {}
         table.insert(sets[surf], "hordez/footsteps/" .. gait .. "/" .. fileName)
     end

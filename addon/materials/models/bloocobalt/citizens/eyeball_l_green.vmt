@@ -14,6 +14,6 @@
 	"$halflambert" "1"
 	"$nodecal" "1"
 
-	"$RaytraceSphere" "1"
+	"$RaytraceSphere" "0"
 	"$SphereTexkillCombo" "0"
 }

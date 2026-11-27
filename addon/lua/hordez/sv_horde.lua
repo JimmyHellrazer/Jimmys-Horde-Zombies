@@ -657,7 +657,7 @@ HZ.Snd = {}
 local function ListSnd(dir, sexed)
     local function ListSounds(death)
         local out = {}
-        for _, fileName in ipairs(file.Find("sound/" .. death .. "/*.wav", "GAME")) do
+        for _, fileName in ipairs(file.Find("sound/" .. death .. "/*.ogg", "GAME")) do
             if not fileName:lower():find("ceda", 1, true) then out[#out + 1] = death .. "/" .. fileName end
         end
 
@@ -703,8 +703,37 @@ end
 local soundLengths = {}
 local soundPending = {}
 
-local function WavDuration(data)
-    if not data or #data < 44 or data:sub(1, 4) ~= "RIFF" or data:sub(9, 12) ~= "WAVE" then return nil end
+local function SoundDuration(data)
+    if not data or #data < 44 then return nil end
+
+    if data:sub(1, 4) == "OggS" then
+        local vpos = data:find("\1vorbis", 1, true)
+        if not vpos or vpos + 15 > #data then return nil end
+
+        local r1, r2, r3, r4 = data:byte(vpos + 12, vpos + 15)
+        local sampleRate = r1 + r2 * 256 + r3 * 65536 + r4 * 16777216
+        if sampleRate <= 0 then return nil end
+
+        local lastOgg
+        local searchFrom = math.max(1, #data - 65536)
+        local pos = searchFrom
+        while true do
+            local found = data:find("OggS", pos, true)
+            if not found then break end
+            lastOgg = found
+            pos = found + 4
+        end
+
+        if not lastOgg or lastOgg + 13 > #data then return nil end
+
+        local g1, g2, g3, g4, g5, g6 = data:byte(lastOgg + 6, lastOgg + 11)
+        local granule = g1 + g2 * 256 + g3 * 65536 + g4 * 16777216
+            + g5 * 4294967296 + g6 * 1099511627776
+
+        return granule > 0 and granule / sampleRate or nil
+    end
+
+    if data:sub(1, 4) ~= "RIFF" or data:sub(9, 12) ~= "WAVE" then return nil end
     local pos, len, byteRate, dataSize = 13, #data, nil, nil
     while pos + 7 <= len do
         local id = data:sub(pos, pos + 3)
@@ -729,7 +758,7 @@ local function SoundLength(path, zombie, now, pitch)
         soundPending[path] = true
         file.AsyncRead("sound/" .. path, "GAME", function(_, _, status, data)
             soundPending[path] = nil
-            local dur = status == FSASYNC_OK and WavDuration(data) or 1
+            local dur = status == FSASYNC_OK and SoundDuration(data) or 1
             dur = dur and dur > 0 and dur or 1
             soundLengths[path] = dur
             if IsValid(zombie) and zombie.hz_yellStart == now then

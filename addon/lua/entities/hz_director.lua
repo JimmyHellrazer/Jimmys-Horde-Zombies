@@ -167,7 +167,7 @@ function ENT:StartHorde(size)
     self.peakEnd = now + 60
     self.sources = {}
     net.Start("hz_cue")
-    net.WriteString("hordez/mega_mob_incoming.wav")
+    net.WriteString("hordez/mega_mob_incoming.ogg")
     net.Broadcast()
     for zombie in pairs(self.owned) do
         if IsValid(zombie) and not zombie.hz_alerted and not zombie.hz_wakeAt then

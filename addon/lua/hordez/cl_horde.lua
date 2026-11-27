@@ -901,7 +901,7 @@ local function SegSeg(ax, ay, az, dx, dy, dz, a, px, py, pz, qx, qy, qz)
 end
 
 local impactSnds = {}
-for _, fileName in ipairs(file.Find("sound/hordez/infected/gore/bullets/*.wav", "GAME")) do
+for _, fileName in ipairs(file.Find("sound/hordez/infected/gore/bullets/*.ogg", "GAME")) do
     impactSnds[#impactSnds + 1] = "hordez/infected/gore/bullets/" .. fileName
 end
 

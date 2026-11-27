@@ -427,6 +427,9 @@ local function EmitQuad(bucket, cache, now, x, y, z, vx, vy, moving, facing, idx
     quads[base + 15] = fade * 255
 end
 
+local CULL_PAD = 260
+local CULL_COS2 = 0.25 * 0.25
+
 local function GatherBucket(bucket, now)
     local list = HZ.ClientZombies
     local count = 0
@@ -437,6 +440,11 @@ local function GatherBucket(bucket, now)
     local eye = EyePos()
     ex, ey = eye.x, eye.y
     local ez = eye.z
+    local aim = EyeVector()
+    local ax, ay = aim.x, aim.y
+    local aLen = sqrt(ax * ax + ay * ay)
+    local cull = aLen > 0.05
+    if cull then ax, ay = ax / aLen, ay / aLen end
     bright = impLight * 127.5
     local syncNoDraw = HZ.SyncNoDraw
 
@@ -450,6 +458,16 @@ local function GatherBucket(bucket, now)
             local impostor = want and distSqr and not ent.hz_ragdolled and not ent:IsDormant()
                 and distSqr > fadeStartSqr and count < BUCKET_QUADS
 
+            local pos
+            if impostor and cull then
+                pos = ent:GetPos()
+                local dx, dy = pos.x - ex, pos.y - ey
+                local ahead = dx * ax + dy * ay
+                if ahead < -CULL_PAD and ahead * ahead > (dx * dx + dy * dy) * CULL_COS2 then
+                    impostor = false
+                end
+            end
+
             if not impostor then
                 if ent.hz_imp then
                     ent.hz_imp, ent.hz_ipt, ent.hz_fade = nil, nil, nil
@@ -460,7 +478,7 @@ local function GatherBucket(bucket, now)
                 local fade = min((dist - fadeStart) / max(fadeEnd - fadeStart, 1), 1)
                 ent.hz_imp, ent.hz_fade = true, fade
                 syncNoDraw(ent)
-                local pos = ent:GetPos()
+                pos = pos or ent:GetPos()
                 local x, y, z = pos.x, pos.y, pos.z
                 local vx, vy = 0, 0
                 local lastTime = ent.hz_ipt
@@ -502,12 +520,15 @@ local function GatherBucket(bucket, now)
             local id = row.id
             local group = row.group
             local x, y, z = posAt(row, now)
-            local moving = now < group.t1
             local dx, dy, dz = x - ex, y - ey, z - ez
-            EmitQuad(bucket, group, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
-                group.yaw, id, row.female, row.shambler, dx * dx + dy * dy + dz * dz, 1)
+            local ahead = dx * ax + dy * ay
+            if not cull or ahead >= -CULL_PAD or ahead * ahead <= (dx * dx + dy * dy) * CULL_COS2 then
+                local moving = now < group.t1
+                EmitQuad(bucket, group, now, x, y, z, moving and group.vx or 0, moving and group.vy or 0, moving,
+                    group.yaw, id, row.female, row.shambler, dx * dx + dy * dy + dz * dz, 1)
 
-            count = count + 1
+                count = count + 1
+            end
         end
 
         local clusters = HZ.VirtualClusters
@@ -610,13 +631,39 @@ local function RebuildBucket(b, now)
     if t0 then HZ.ProfAdd("cl_imp_build", SysTime() - t0) end
 end
 
+local lastAimX, lastAimY, fastLeft = 1, 0, 0
+
 local function Rebuild(now)
     if now - epoch > EPOCH_SPAN then
         epoch = now
+        fastLeft = 0
         for b = 0, BUCKETS - 1 do RebuildBucket(b, now) end
 
         nextBucketAt = now + REBUILD / BUCKETS
 
+        return
+    end
+
+    local aim = EyeVector()
+    local ax, ay = aim.x, aim.y
+    local aLen = sqrt(ax * ax + ay * ay)
+    if aLen > 0.05 then
+        ax, ay = ax / aLen, ay / aLen
+        if ax * lastAimX + ay * lastAimY < 0.7 then
+            lastAimX, lastAimY = ax, ay
+            fastLeft = BUCKETS
+        end
+    end
+
+    if fastLeft > 0 then
+        local steps = min(4, fastLeft)
+        fastLeft = fastLeft - steps
+        for _ = 1, steps do
+            RebuildBucket(nextBucket, now)
+            nextBucket = (nextBucket + 1) % BUCKETS
+        end
+
+        nextBucketAt = now + REBUILD / BUCKETS
         return
     end
 

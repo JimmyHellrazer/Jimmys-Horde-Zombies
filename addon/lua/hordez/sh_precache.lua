@@ -46,6 +46,7 @@ end
 
 if CLIENT then
     local warmQueue, warmSeen = {}, {}
+    local warmPinned = {}
     local warmSndQueue, warmSndSeen = {}, {}
     local warmRt
     local warmPos, warmCam, warmAng = Vector(0, 0, 0), Vector(-80, 0, 36), Angle(0, 0, 0)
@@ -114,7 +115,12 @@ if CLIENT then
 
         cam.End3D()
         render.PopRenderTarget()
-        ent:Remove()
+        ent:SetLOD(-1)
+        if IsValid(warmPinned[path]) then
+            ent:Remove()
+        else
+            warmPinned[path] = ent
+        end
     end
 
     local function StepWarm(depth, sky, sky3d)

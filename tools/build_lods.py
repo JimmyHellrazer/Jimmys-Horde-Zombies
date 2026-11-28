@@ -53,6 +53,7 @@ def main():
                 print("built", name, flush=True)
 
     print("failed:", "; ".join(failed) if failed else "none")
+    subprocess.run([sys.executable, os.path.join(HERE, "flatten_materials.py")] + names, check=True)
 
 
 def build(name, t):

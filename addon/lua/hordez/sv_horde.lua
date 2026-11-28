@@ -926,11 +926,14 @@ function HZ.SpawnZombie(pos, yaw, opts)
     opts = opts or {}
     if not opts.force and not HZ.CanSpawn() then return nil end
 
-    local t0 = HZ.ProfOn and SysTime()
+    local prof = HZ.ProfOn
+    local t0 = prof and SysTime()
     pos = HZ.FreeSpot(pos)
+    local t1 = prof and SysTime()
     local zombie = ents.Create("hz_zombie")
     if not IsValid(zombie) then return nil end
 
+    local t2 = prof and SysTime()
     zombie.hz_model = opts.model
     zombie.hz_custom = opts.custom
     zombie.hz_idleType = opts.idle or "random"
@@ -946,42 +949,87 @@ function HZ.SpawnZombie(pos, yaw, opts)
     zombie:SetPos(pos)
     zombie:SetAngles(Angle(0, yaw or math.Rand(0, 360), 0))
     zombie:Spawn()
+    local t3 = prof and SysTime()
     zombie:Activate()
-    if t0 then HZ.ProfAdd("sv_spawn", SysTime() - t0) end
+    if prof then
+        local t4 = SysTime()
+        HZ.ProfAdd("sv_sp_free", t1 - t0)
+        HZ.ProfAdd("sv_sp_create", t2 - t1)
+        HZ.ProfAdd("sv_sp_spawn", t3 - t2)
+        HZ.ProfAdd("sv_sp_act", t4 - t3)
+        HZ.ProfAdd("sv_spawn", t4 - t0)
+    end
 
     return zombie
 end
 
-local WARM_DELAY, WARM_INTERVAL = 2, 0.05
+local pinnedModels = HZ.PinnedModels or {}
+HZ.PinnedModels = pinnedModels
 
-local function WarmSpawns()
-    local queue = {}
+local shuttingDown = false
+local PinModel
+
+local function OnPinRemoved(_, mdl)
+    if shuttingDown then return end
+
+    if HZ.CV.debug:GetBool() then print("[hordez] model pin removed, pinning again: " .. mdl) end
+    timer.Simple(0, function()
+        PinModel(mdl)
+    end)
+end
+
+function PinModel(mdl)
+    local cur = pinnedModels[mdl]
+    if IsValid(cur) then return cur end
+
+    local pin = ents.Create("prop_dynamic")
+    if not IsValid(pin) then return nil end
+
+    pin:SetModel(mdl)
+    pin:SetNoDraw(true)
+    pin.DoNotDuplicate = true
+    pin:CallOnRemove("hordez_pin", OnPinRemoved, mdl)
+    HZ.ResolvePools(pin)
+    HZ.ResolveShamblerPools(pin)
+    HZ.WarmBodygroups(pin)
+    pinnedModels[mdl] = pin
+
+    return pin
+end
+
+local function WarmSpawnsSync()
+    local t0 = SysTime()
+    local ok = 0
     for _, model in ipairs(HZ.Models) do
-        queue[#queue + 1] = { model, false }
-        queue[#queue + 1] = { model, true }
+        if IsValid(PinModel(model)) then ok = ok + 1 end
     end
 
-    local spent, total = 0, #queue
-    timer.Create("hordez_warm_spawn", WARM_INTERVAL, total, function()
-        local entry = table.remove(queue)
-        local t0 = SysTime()
-        local zombie = ents.Create("hz_zombie")
-        if IsValid(zombie) then
-            zombie.hz_model, zombie.hz_shambler, zombie.hz_custom, zombie.hz_placed = entry[1], entry[2], false, true
-            zombie:SetNoDraw(true)
-            zombie:Spawn()
-            zombie:Remove()
-        end
+    if HZ.CV.debug:GetBool() or HZ.ProfOn then
+        print(("[hordez] pinned %d/%d zombie models in %.0f ms"):format(ok, #HZ.Models, (SysTime() - t0) * 1000))
+    end
+end
 
+local function WarmSpawnsAsync()
+    local idx, ok, spent, total = 1, 0, 0, #HZ.Models
+    timer.Create("hordez_warm_spawn", 0.05, total, function()
+        local mdl = HZ.Models[idx]
+        idx = idx + 1
+        if not mdl then return end
+
+        local t0 = SysTime()
+        if IsValid(PinModel(mdl)) then ok = ok + 1 end
         spent = spent + SysTime() - t0
-        if #queue == 0 and HZ.CV.debug:GetBool() then
-            print(("[hordez] warmed %d zombie spawns in %.0f ms"):format(total, spent * 1000))
+        if idx > total and (HZ.CV.debug:GetBool() or HZ.ProfOn) then
+            print(("[hordez] pinned %d/%d zombie models in %.0f ms"):format(ok, total, spent * 1000))
         end
     end)
 end
 
-hook.Add("InitPostEntity", "hordez_warm_spawn", function()
-    timer.Simple(WARM_DELAY, WarmSpawns)
+hook.Add("InitPostEntity", "hordez_warm_spawn", WarmSpawnsSync)
+if #ents.GetAll() > 0 then timer.Simple(0.1, WarmSpawnsAsync) end
+
+hook.Add("ShutDown", "hordez_pin_models", function()
+    shuttingDown = true
 end)
 
 function HZ.IsStraggler(zombie, now)

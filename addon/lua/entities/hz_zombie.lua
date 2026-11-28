@@ -114,19 +114,31 @@ local function RandomIdle()
 end
 
 function ENT:Initialize()
-    self:SetModel(self.hz_model or HZ.RandomModel())
+    local prof = HZ.ProfOn
+    local t0 = prof and SysTime()
+    local mdl = self.hz_model or HZ.RandomModel()
+    self:SetModel(mdl)
+    local t1 = prof and SysTime()
+    if prof and (t1 - t0) > 0.01 then
+        local dc = GetConVar("datacachesize")
+        print(("[hordez] slow SetModel (%.1fms): %s | pinned=%s | datacache=%dMB"):format(
+            (t1 - t0) * 1000, mdl, tostring(IsValid(HZ.PinnedModels and HZ.PinnedModels[mdl])),
+            dc and dc:GetInt() or -1))
+    end
     if self.hz_custom == nil then self.hz_custom = HZ.PickCustomModel() end
     if self.hz_custom then self:SetNW2String("hz_custom", self.hz_custom) end
     self.hz_female = self:GetModel():find("female", 1, true) ~= nil
     local skins = self:SkinCount()
     if skins and skins > 1 then self:SetSkin(math.random(0, skins - 1)) end
     HZ.RandomBodygroups(self)
+    local t2 = prof and SysTime()
 
     local health = self.hz_shambler and CV.sh_health:GetInt() or CV.health:GetInt()
     self:SetHealth(health)
     self:SetMaxHealth(health)
     self:SetCollisionBounds(Vector(-12, -12, 0), Vector(12, 12, 70))
     self:SetCollisionGroup(COLLISION_GROUP_NPC_SCRIPTED)
+    self:SetSurroundingBounds(Vector(-72, -72, -8), Vector(72, 72, 84))
     self:AddFlags(FL_OBJECT)
     self:SetBloodColor(BLOOD_COLOR_RED)
 
@@ -138,7 +150,9 @@ function ENT:Initialize()
     loco:SetDeceleration(1600)
     loco:SetMaxYawRate(400)
 
+    local t3 = prof and SysTime()
     self.P = self.hz_shambler and HZ.ResolveShamblerPools(self) or HZ.ResolvePools(self)
+    local t4 = prof and SysTime()
     self.hz_runSeq = HZ.Pick(self.P.run)
     self.hz_walkSeq = HZ.Pick(self.P.walk)
     local variance = math.Clamp(CV.speed_var:GetFloat(), 0, 0.9)
@@ -154,6 +168,15 @@ function ENT:Initialize()
     self.hz_flankSlot = math.Rand(-1, 1)
     if not self.hz_idleType or self.hz_idleType == "random" then self.hz_idleType = RandomIdle() end
     HZ.Register(self)
+    if prof then
+        local t5 = SysTime()
+        HZ.ProfAdd("sv_ini_mdl", t1 - t0)
+        HZ.ProfAdd("sv_ini_bg", t2 - t1)
+        HZ.ProfAdd("sv_ini_seq", t4 - t3)
+        HZ.ProfAdd("sv_ini_reg", t5 - t4)
+        HZ.ProfAdd("sv_ini_tot", t5 - t0)
+    end
+
     if not self.hz_placed then
         timer.Simple(0, function()
             if IsValid(self) and not self.hz_dead then

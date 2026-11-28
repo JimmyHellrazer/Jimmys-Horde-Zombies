@@ -93,13 +93,47 @@ end
 local CLEAR_MINS, CLEAR_MAXS = Vector(-12, -12, 0), Vector(12, 12, 54)
 local FEEL_MINS, FEEL_MAXS = Vector(-11, -11, 0), Vector(11, 11, 44)
 local FEEL_UP, FEEL_REACH, FEEL_STEER = Vector(0, 0, 24), 52, 84
-local FEEL_COS, FEEL_SIN = math.cos(math.rad(35)), math.sin(math.rad(35))
-local FEEL_WIDE_COS, FEEL_WIDE_SIN = math.cos(math.rad(70)), math.sin(math.rad(70))
+local FEEL_TURNS, ESCAPE_TURNS = {}, {}
+for i, deg in ipairs({ 35, 70, 105 }) do
+    FEEL_TURNS[i] = { math.cos(math.rad(deg)), math.sin(math.rad(deg)) }
+end
+
+for i, deg in ipairs({ 55, 95, 135, 175 }) do
+    ESCAPE_TURNS[i] = { math.cos(math.rad(deg)), math.sin(math.rad(deg)) }
+end
+
+local ESCAPE_REACH, ESCAPE_STEP = 56, 76
+local PORTAL_MARGIN, PORTAL_PRE, PORTAL_PAST = 18, 18, 28
 local FLANK_MINS, FLANK_MAXS = Vector(-12, -12, 0), Vector(12, 12, 44)
 local AHEAD_MINS, AHEAD_MAXS = Vector(-10, -10, 0), Vector(10, 10, 8)
 
-local IDLE_WEIGHTS = { { "stand", 30 }, { "wander", 30 }, { "sit", 10 }, { "lie", 10 }, { "lean", 10 },
+local IDLE_WEIGHTS = { { "stand", 20 }, { "wander", 45 }, { "sit", 10 }, { "lie", 10 }, { "lean", 10 },
     { "crouch", 10 }, { "chair", 10 } }
+
+local ROAM_LEASH = 900
+
+local function PortalSpan(portal)
+    local lo, hi = portal.lo, portal.hi
+    local margin = math.min(PORTAL_MARGIN, (hi - lo) * 0.5)
+
+    return lo + margin, hi - margin
+end
+
+local function PortalAim(portal, lat, dep)
+    local lo, hi = PortalSpan(portal)
+    local sign = portal.sign
+    local want = math.Clamp(lat, lo, hi)
+    local past = portal.bEdge + sign * math.min(PORTAL_PAST, portal.bDepth * 0.5)
+    local run, gap = (past - dep) * sign, (portal.aEdge - dep) * sign
+    if run > 1 and gap > 0 then
+        local cross = lat + (want - lat) * (gap / run)
+        if cross < lo - 5 or cross > hi + 5 then
+            return want, portal.aEdge - sign * math.min(PORTAL_PRE, portal.aDepth * 0.5), past
+        end
+    end
+
+    return want, past, nil
+end
 
 local function RandomIdle()
     local total = 0
@@ -166,7 +200,11 @@ function ENT:Initialize()
 
     self.hz_nextBrain = 0
     self.hz_flankSlot = math.Rand(-1, 1)
-    if not self.hz_idleType or self.hz_idleType == "random" then self.hz_idleType = RandomIdle() end
+    if not self.hz_idleType or self.hz_idleType == "random" then
+        self.hz_idleType = RandomIdle()
+        self.hz_roams = true
+    end
+
     HZ.Register(self)
     if prof then
         local t5 = SysTime()
@@ -946,6 +984,7 @@ end
 
 function ENT:HZ_EnterIdle()
     local now = CurTime()
+    self.hz_home = self.hz_home or self:GetPos()
     if self.hz_startAlerted then
         self.hz_alerted = true
         self.hz_pose = "stand"
@@ -967,6 +1006,47 @@ function ENT:HZ_EnterIdle()
     if idleType == "wander" or not pool or #pool == 0 then pool = self.P.stand end
     self:HZ_SetSeq(HZ.Pick(pool))
     if idleType == "sit" or idleType == "lie" or idleType == "lean" then self:SetCycle(math.random()) end
+end
+
+function ENT:HZ_PathGoal(pos, fromId, toId, afterId, reach)
+    local flow = HZ.Flow
+    local portal, toArea = flow.Portal(fromId, toId), flow.Area(toId)
+    if not portal or not toArea or not IsValid(toArea) then return nil end
+
+    local alongX, sign = portal.alongX, portal.sign
+    local lat, dep = alongX and pos.x or pos.y, alongX and pos.y or pos.x
+    local want, across, past = PortalAim(portal, lat, dep)
+    local goal = alongX and Vector(want, across, pos.z) or Vector(across, want, pos.z)
+    if past then
+        local after = alongX and Vector(want, past, pos.z) or Vector(past, want, pos.z)
+        after.z = toArea:GetZ(after)
+
+        return goal, after
+    end
+
+    goal.z = toArea:GetZ(goal)
+    if not afterId or (across - dep) * sign > reach or flow.ClimbLink(toId, afterId) then return goal end
+
+    local second, afterArea = flow.Portal(toId, afterId), flow.Area(afterId)
+    if not second or not afterArea or not IsValid(afterArea) then return goal end
+
+    local farX = second.alongX
+    local farWant, farAcross = PortalAim(second, farX and goal.x or goal.y, farX and goal.y or goal.x)
+    local fx, fy = farX and farWant or farAcross, farX and farAcross or farWant
+    local farLat, farDep = alongX and fx or fy, alongX and fy or fx
+    local run = (farDep - dep) * sign
+    if run <= 1 then return goal end
+
+    local lo, hi = PortalSpan(portal)
+    local slope = (farLat - lat) / run
+    local nearCross = lat + slope * math.Clamp((portal.aEdge - dep) * sign, 0, run)
+    local farCross = lat + slope * math.Clamp((portal.bEdge - dep) * sign, 0, run)
+    if nearCross < lo or nearCross > hi or farCross < lo or farCross > hi then return goal end
+
+    local far = Vector(fx, fy, pos.z)
+    far.z = afterArea:GetZ(far)
+
+    return far
 end
 
 function ENT:HZ_StrollGoal(pos, maxLeg)
@@ -1012,6 +1092,7 @@ function ENT:HZ_StartStroll(now, pos, maxLeg)
         return true
     end
 
+    self.hz_roam = nil
     self.hz_wanderGoal = goal
     self.hz_wanderGiveUp = CurTime() + 4 + leg / 15
     self:HZ_SetMove("walk")
@@ -1019,19 +1100,139 @@ function ENT:HZ_StartStroll(now, pos, maxLeg)
     return true
 end
 
+function ENT:HZ_StartRoam(now, pos)
+    local flow = HZ.Flow
+    local graph = flow.graph
+    local area = graph and flow.AreaOf(self)
+    local id = area and area:GetID()
+    if not id or not graph.center[id] then return false end
+
+    local home = self.hz_home or pos
+    local path, seen, length = { [0] = id, idx = 1 }, { [id] = true }, 0
+    local cur, curArea = id, area
+    for _ = 1, math.random(2, 6) do
+        local options = curArea:GetAdjacentAreas()
+        local pick, pickId
+        for _ = 1, math.min(#options, 4) do
+            local cand = options[math.random(#options)]
+            local candId = cand:GetID()
+            local center = graph.center[candId]
+            if center and not seen[candId] and math.abs(center.z - graph.center[cur].z) < 48
+                and center:DistToSqr(home) < ROAM_LEASH * ROAM_LEASH and not cand:IsUnderwater()
+                and flow.Portal(cur, candId) and not flow.ClimbLink(cur, candId) then
+                pick, pickId = cand, candId
+                break
+            end
+        end
+
+        if not pick then break end
+
+        length = length + graph.center[cur]:Distance(graph.center[pickId])
+        path[#path + 1] = pickId
+        seen[pickId] = true
+        cur, curArea = pickId, pick
+    end
+
+    local goal = path[1] and self:HZ_PathGoal(pos, id, path[1], path[2], 60)
+    if not goal then return false end
+
+    path.final = (curArea:GetRandomPoint() + graph.center[cur]) * 0.5
+    self:HZ_IdleTurn(goal)
+    if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return true end
+
+    now = CurTime()
+    path.at, path.moved = self:GetPos(), now
+    self.hz_roam, self.hz_roamT = path, 0
+    self.hz_wanderGoal = goal
+    self.hz_wanderGiveUp = now + 10 + length / 12
+    self:HZ_SetMove("walk")
+
+    return true
+end
+
+function ENT:HZ_RoamStep(now)
+    local path = self.hz_roam
+    local pos = self:GetPos()
+    if pos:DistToSqr(path.at) > 100 then
+        path.at, path.moved = pos, now
+    elseif now - path.moved > 1.5 then
+        return nil
+    end
+
+    local area = HZ.Flow.AreaOf(self)
+    local id = area and area:GetID()
+    local idx = path.idx
+    for i = idx, #path do
+        if path[i] == id then
+            idx = i + 1
+            path.idx = idx
+            break
+        end
+    end
+
+    local goal = self.hz_wanderGoal
+    if not path[idx] then
+        self.hz_roam = nil
+        goal = path.final
+        self.hz_wanderGiveUp = math.min(self.hz_wanderGiveUp, now + 8)
+    elseif id == path[idx - 1] then
+        goal = self:HZ_PathGoal(pos, id, path[idx], path[idx + 1], 60)
+    end
+
+    self.hz_wanderGoal = goal
+
+    return goal
+end
+
+function ENT:HZ_StopWander(now)
+    self.hz_wanderGoal, self.hz_roam = nil, nil
+    self:HZ_SetSeq(HZ.Pick(self.P.stand))
+    self.hz_nextIdleSwap = now + math.Rand(6, 16)
+    self.hz_nextWander = now + (self.hz_pose == "wander" and math.Rand(3, 9) or math.Rand(6, 20))
+end
+
+function ENT:HZ_Rouse()
+    local pose = self.hz_pose
+    self.hz_restUntil = nil
+    if pose == "sit" or pose == "lie" then
+        local up = self.hz_upSeq or HZ.Pick(pose == "sit" and self.P.sit_wake or self.P.lie_wake)
+        local seq = isstring(up) and self:LookupSequence(up) or up
+        self.hz_upSeq = nil
+        if seq and seq >= 0 then
+            local played = self:HZ_RootPlay(seq, { abort = function()
+                return self.hz_alerted or self.hz_wakeAt or self.hz_inShove
+            end })
+
+            if self.hz_alerted or self.hz_wakeAt or self.hz_dead then
+                if played >= 0.5 then self.hz_pose = "stand" end
+                return
+            end
+        end
+    end
+
+    local now = CurTime()
+    self.hz_idleType, self.hz_pose = "wander", "wander"
+    self:HZ_SetSeq(HZ.Pick(self.P.stand))
+    self.hz_nextIdleSwap = now + math.Rand(6, 16)
+    self.hz_nextWander = now + math.Rand(1, 4)
+    self.hz_settleAt = now + math.Rand(30, 80)
+end
+
 function ENT:HZ_Idle(now)
     if now >= self.hz_nextBrain then self:HZ_IdleBrain(now) end
     local goal = self.hz_wanderGoal
-    if goal then
-        if self:GetPos():DistToSqr(goal) < 24 * 24 or now > self.hz_wanderGiveUp then
-            self.hz_wanderGoal = nil
-            self:HZ_SetSeq(HZ.Pick(self.P.stand))
-            self.hz_nextIdleSwap = now + math.Rand(6, 16)
-            self.hz_nextWander = now + math.Rand(6, 20)
-        else
-            self.loco:Approach(goal, 1)
-            self.loco:FaceTowards(goal)
-        end
+    if not goal then return end
+
+    if self.hz_roam and now >= self.hz_roamT then
+        self.hz_roamT = now + 0.2
+        goal = self:HZ_RoamStep(now)
+    end
+
+    if not goal or now > self.hz_wanderGiveUp or (not self.hz_roam and self:GetPos():DistToSqr(goal) < 24 * 24) then
+        self:HZ_StopWander(now)
+    else
+        self.loco:Approach(goal, 1)
+        self.loco:FaceTowards(goal)
     end
 end
 
@@ -1061,6 +1262,21 @@ function ENT:HZ_IdleBrain(now)
         return
     end
 
+    if self.hz_roams and not self.hz_wanderGoal then
+        if pose == "wander" then
+            self.hz_restUntil = nil
+            self.hz_settleAt = self.hz_settleAt or now + math.Rand(30, 80)
+        else
+            self.hz_restUntil = self.hz_restUntil or now + math.Rand(25, 80)
+            if now > self.hz_restUntil then
+                self:HZ_Rouse()
+                if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return end
+
+                pose = self.hz_pose
+            end
+        end
+    end
+
     if pose == "wander" and not self.hz_wanderGoal and self.hz_settleAt and now > self.hz_settleAt then
         self:HZ_TrySettle(now, pos)
         pose = self.hz_pose
@@ -1074,12 +1290,16 @@ function ENT:HZ_IdleBrain(now)
 
     local strolls = (pose == "wander" or (pose == "stand" and math.random() < 0.08)) and not self.hz_wanderGoal
     if strolls and now > (self.hz_nextWander or 0) then
-        self.hz_nextWander = now + math.Rand(6, 20)
-        if math.random() < 0.25 then
+        local roams = pose == "wander"
+        local roll = math.random()
+        self.hz_nextWander = now + (roams and math.Rand(3, 9) or math.Rand(6, 20))
+        if roll < (roams and 0.15 or 0.25) then
             self:HZ_IdleTurn(pos + Angle(0, math.Rand(0, 360), 0):Forward() * 100)
             if self.hz_alerted or self.hz_wakeAt or self.hz_dead then return end
 
             self:HZ_SetSeq(HZ.Pick(self.P.stand))
+        elseif roams and roll < 0.7 and self:HZ_StartRoam(now, pos) then
+            return
         elseif self:HZ_StartStroll(now, pos, pose == "wander" and 200 or 90) then
             return
         end
@@ -1139,7 +1359,7 @@ end
 function ENT:HZ_Wake()
     self.hz_wakeAt = nil
     self.hz_alerted = true
-    self.hz_wanderGoal = nil
+    self.hz_wanderGoal, self.hz_roam = nil, nil
     self.hz_lastHasTarget = CurTime()
     HZ.Spread(self)
 
@@ -1183,6 +1403,7 @@ function ENT:HZ_Calm()
     self.hz_alerted = false
     self.hz_target, self.hz_goal, self.hz_attacking, self.hz_unreach = nil, nil, nil, nil
     self.hz_pose = "wander"
+    self.hz_home = self:GetPos()
     self:HZ_SetSeq(HZ.Pick(self.P.stand))
     self.hz_nextWander = CurTime() + math.Rand(2, 6)
     self.hz_nextIdleSwap = CurTime() + math.Rand(6, 16)
@@ -1206,7 +1427,7 @@ function ENT:HZ_TrySettle(now, pos)
     local down = tr and HZ.Pick(self.P[tr[1]])
     if down and self:LookupSequence(tr[2]) >= 0 then
         self.hz_settleAt, self.hz_settlePick = nil, nil
-        local played = self:HZ_RootPlay(self:LookupSequence(down),
+        local played = self:HZ_RootPlay(down,
             { abort = function()
                 return self.hz_alerted or self.hz_wakeAt or self.hz_inShove
             end })
@@ -1321,6 +1542,15 @@ function ENT:HZ_Chase(now)
         self:HZ_SetMove("run")
     end
 
+    local after = self.hz_goalNext
+    if after then
+        local at = self:GetPos()
+        local dx, dy = goal.x - at.x, goal.y - at.y
+        if dx * dx + dy * dy < 36 then
+            goal, self.hz_goal, self.hz_goalNext = after, after, nil
+        end
+    end
+
     self.loco:Approach(goal, 1)
     self.loco:FaceTowards(goal)
     self:HZ_StuckCheck(now)
@@ -1328,7 +1558,7 @@ end
 
 function ENT:HZ_Brain(now)
     local pos = self:GetPos()
-    self.hz_atWall = nil
+    self.hz_atWall, self.hz_goalNext = nil, nil
     HZ.GridMove(self, pos)
     local playerDist = HZ.NearestPlayerDist(pos)
     local hotDist = CV.hot_dist:GetFloat()
@@ -1443,15 +1673,16 @@ function ENT:HZ_Brain(now)
     elseif nextId == false or direct then
         goal = targetPos
     elseif nextId then
-        local nextArea = HZ.Flow.Area(nextId)
+        local afterNext = HZ.Flow.nxt[nextId]
+        local reach = math.Clamp(think * 240, 48, 150)
+        goal, self.hz_goalNext = self:HZ_PathGoal(pos, area:GetID(), nextId, afterNext, reach)
+        local nextArea = not goal and HZ.Flow.Area(nextId)
         if nextArea and IsValid(nextArea) then
             goal = nextArea:GetClosestPointOnArea(pos)
             local center = nextArea:GetCenter()
             local dir = center - goal
             local len = dir:Length()
             if len > 1 then goal = goal + dir * (math.min(20, len) / len) end
-            local afterNext = HZ.Flow.nxt[nextId]
-            local reach = math.Clamp(think * 240, 48, 150)
             if afterNext and pos:DistToSqr(goal) < reach * reach then
                 local afterArea = HZ.Flow.Area(afterNext)
                 if afterArea and IsValid(afterArea) then goal = afterArea:GetClosestPointOnArea(goal) end
@@ -1474,7 +1705,7 @@ function ENT:HZ_Brain(now)
 
     self.hz_unreach = nil
 
-    if not self.hz_atWall and not link and playerDist < hotDist then
+    if not self.hz_atWall and not link and not self.hz_goalNext and playerDist < hotDist then
         local width, closeDist, ramp
         if self.hz_shambler then
             width, closeDist, ramp = CV.spread_sh:GetFloat(), 70, 260
@@ -1510,12 +1741,31 @@ function ENT:HZ_Brain(now)
 
     local feelBlocked
     if not link and targetDist > 90 and playerDist < hotDist then
-        goal, feelBlocked = self:HZ_Feel(pos, goal)
+        goal, feelBlocked = self:HZ_Feel(pos, goal, now)
     end
 
     local separation = not self.hz_atWall and HZ.Separation(self, pos)
-    if separation then goal = goal + separation end
-    if self.hz_sideUntil and now < self.hz_sideUntil then goal = goal + self.hz_sideOff end
+    if separation then
+        local sx, sy = separation.x, separation.y
+        local gx, gy = goal.x - pos.x, goal.y - pos.y
+        local room = (gx * gx + gy * gy) * 0.16
+        local push = sx * sx + sy * sy
+        if push > room and push > 0 then
+            local scale = math.sqrt(room / push)
+            sx, sy = sx * scale, sy * scale
+        end
+
+        goal = Vector(goal.x + sx, goal.y + sy, goal.z)
+    end
+
+    if self.hz_sideUntil then
+        if now < self.hz_sideUntil then
+            goal, self.hz_goalNext = self.hz_sidePos, nil
+        else
+            self.hz_sideUntil = nil
+        end
+    end
+
     self.hz_goal = goal
     if not self.hz_falling then self:HZ_SetMove("run") end
     if targetDist > 70 and playerDist < hotDist and feelBlocked ~= false and CV.climb:GetBool()
@@ -1801,7 +2051,7 @@ function ENT:HZ_TryHit(target, reach)
     if target:IsPlayer() then target:ViewPunch(Angle(math.Rand(-3, 3), math.Rand(-4, 4), math.Rand(-2, 2))) end
 end
 
-function ENT:HZ_Feel(pos, goal)
+function ENT:HZ_Feel(pos, goal, now)
     local dx, dy = goal.x - pos.x, goal.y - pos.y
     local len = math.sqrt(dx * dx + dy * dy)
     if len < 24 then return goal, false end
@@ -1815,22 +2065,56 @@ function ENT:HZ_Feel(pos, goal)
 
     local normal = ahead.HitNormal
     local cross = dx * normal.y - dy * normal.x
-    local first = cross > 0.05 and 1 or (cross < -0.05 and -1 or (self.hz_flankSlot >= 0 and 1 or -1))
-    for anglePass = 1, 2 do
-        local ca = anglePass == 1 and FEEL_COS or FEEL_WIDE_COS
-        local sa = anglePass == 1 and FEEL_SIN or FEEL_WIDE_SIN
-        for pass = 1, 2 do
-            local side = pass == 1 and first or -first
-            local sx = dx * ca - dy * sa * side
-            local sy = dy * ca + dx * sa * side
-            scratchTo:SetUnpacked(pos.x + sx * FEEL_REACH, pos.y + sy * FEEL_REACH, pos.z + 18)
-            if not HullTrace(scratchFrom, scratchTo, FEEL_MINS, FEEL_MAXS, MASK_NPCSOLID, NO_ZOMBIES).Hit then
-                return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
-            end
+    local held = self.hz_feelSide ~= nil and now < self.hz_feelUntil
+    local first = held and self.hz_feelSide
+        or (cross > 0.05 and 1 or (cross < -0.05 and -1 or (self.hz_flankSlot >= 0 and 1 or -1)))
+
+    local turns = #FEEL_TURNS
+    for try = 1, turns * 2 do
+        local turn, side
+        if held then
+            turn = FEEL_TURNS[(try - 1) % turns + 1]
+            side = try <= turns and first or -first
+        else
+            turn = FEEL_TURNS[math.ceil(try / 2)]
+            side = try % 2 == 1 and first or -first
+        end
+
+        local sx = dx * turn[1] - dy * turn[2] * side
+        local sy = dy * turn[1] + dx * turn[2] * side
+        scratchTo:SetUnpacked(pos.x + sx * FEEL_REACH, pos.y + sy * FEEL_REACH, pos.z + 18)
+        if not HullTrace(scratchFrom, scratchTo, FEEL_MINS, FEEL_MAXS, MASK_NPCSOLID, NO_ZOMBIES).Hit then
+            self.hz_feelSide, self.hz_feelUntil = side, now + 1.2
+            return Vector(pos.x + sx * FEEL_STEER, pos.y + sy * FEEL_STEER, goal.z), true
         end
     end
 
     return goal, true
+end
+
+function ENT:HZ_EscapeSpot(pos, goal, now)
+    local dx, dy = goal.x - pos.x, goal.y - pos.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1 then return nil end
+
+    dx, dy = dx / len, dy / len
+    local first = self.hz_escSide or (self.hz_flankSlot >= 0 and 1 or -1)
+    if now - (self.hz_escAt or 0) < 4 then first = -first end
+    scratchFrom:SetUnpacked(pos.x, pos.y, pos.z + 18)
+    for i = 1, #ESCAPE_TURNS do
+        local turn = ESCAPE_TURNS[i]
+        for pass = 1, 2 do
+            local side = pass == 1 and first or -first
+            local sx = dx * turn[1] - dy * turn[2] * side
+            local sy = dy * turn[1] + dx * turn[2] * side
+            scratchTo:SetUnpacked(pos.x + sx * ESCAPE_REACH, pos.y + sy * ESCAPE_REACH, pos.z + 18)
+            if not HullTrace(scratchFrom, scratchTo, FEEL_MINS, FEEL_MAXS, MASK_NPCSOLID, NO_ZOMBIES).Hit then
+                self.hz_escSide, self.hz_escAt = side, now
+                self.hz_feelSide, self.hz_feelUntil = side, now + 1.5
+                return Vector(pos.x + sx * ESCAPE_STEP, pos.y + sy * ESCAPE_STEP, pos.z)
+            end
+        end
+    end
 end
 
 function ENT:HZ_StuckCheck(now)
@@ -1866,14 +2150,16 @@ function ENT:HZ_StuckCheck(now)
         end
     end
 
-    if stuckTime > 1.5 and not self.hz_sideUntil then
-        self.hz_sideOff = self:GetRight() * (math.random() < 0.5 and -70 or 70)
-        self.hz_sideUntil = now + 0.8
-    elseif self.hz_sideUntil and now > self.hz_sideUntil + 1 then
-        self.hz_sideUntil = nil
+    if stuckTime > 0.8 and now >= (self.hz_nextEscape or 0) then
+        self.hz_nextEscape = now + 1.6
+        local spot = self:HZ_EscapeSpot(pos, goal, now)
+        if spot then
+            self.hz_sidePos, self.hz_sideUntil = spot, now + 0.7
+            self.hz_goal, self.hz_goalNext = spot, nil
+        end
     end
 
-    if stuckTime > 6 then
+    if stuckTime > 6 or (stuckTime > 0.8 and now - (self.hz_progressAt or now) > 8) then
         self.hz_stuckSince = nil
         if HZ.SeenByPlayers(pos, 400) then return end
 
@@ -2205,10 +2491,14 @@ function ENT:HZ_PoundDoor(door, at, dir, mat, bash)
     self.hz_nextBrain = 0
 end
 
+local OBSTACLE_MINS, OBSTACLE_MAXS = Vector(-8, -8, -20), Vector(8, 8, 16)
+
 function ENT:HZ_TryObstacle()
     local pos = self:GetPos() + Vector(0, 0, 40)
     local dir = self:GetForward()
-    local tr = util.TraceLine({ start = pos, endpos = pos + dir * 48, mask = MASK_NPCSOLID, filter = NO_BODIES })
+    local tr = util.TraceHull({ start = pos, endpos = pos + dir * 40, mins = OBSTACLE_MINS, maxs = OBSTACLE_MAXS,
+        mask = MASK_NPCSOLID, filter = NO_BODIES })
+
     local ent = tr.Entity
     if not IsValid(ent) or ent:IsPlayer() or ent:IsNPC() or ent:IsNextBot() then return false end
 
@@ -2235,6 +2525,14 @@ function ENT:HZ_TryObstacle()
     end
 
     if ent:GetMoveType() == MOVETYPE_VPHYSICS or class:find("breakable", 1, true) then
+        local now = CurTime()
+        if self.hz_blockEnt ~= ent or now > self.hz_blockUntil then self.hz_blockEnt, self.hz_blockHits = ent, 0 end
+        self.hz_blockUntil = now + 5
+        self.hz_blockHits = self.hz_blockHits + 1
+        local body = ent:GetPhysicsObject()
+        local sturdy = ent:Health() <= 0
+        if sturdy and (self.hz_blockHits > 3 or (IsValid(body) and not body:IsMotionEnabled())) then return false end
+
         self:HZ_PlayOnce(HZ.Pick(self.P.melee), 1.3, false, nil, tr.HitPos)
         if not IsValid(ent) then return true end
 

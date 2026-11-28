@@ -418,6 +418,64 @@ function Flow.VaultLink(graph, areaA, areaB)
     return { foot = pointA - dir * 10, top = top, vault = true, h = height, len = len }
 end
 
+local PORTAL_OVERLAP = 8
+local portalGraph, rects, portals
+
+local function AreaRect(graph, id)
+    local rect = rects[id]
+    if rect ~= nil then return rect end
+
+    rect = false
+    local area = graph.area[id]
+    if area and IsValid(area) then
+        local a, b = area:GetCorner(0), area:GetCorner(2)
+        rect = { math.min(a.x, b.x), math.min(a.y, b.y), math.max(a.x, b.x), math.max(a.y, b.y) }
+    end
+
+    rects[id] = rect
+
+    return rect
+end
+
+local function EdgePortal(a, b, lo, hi, alongX)
+    local near, far = alongX and 2 or 1, alongX and 4 or 3
+    local sign = (b[near] + b[far]) > (a[near] + a[far]) and 1 or -1
+
+    return { alongX = alongX, lo = lo, hi = hi, sign = sign, aEdge = sign > 0 and a[far] or a[near],
+        bEdge = sign > 0 and b[near] or b[far], aDepth = a[far] - a[near], bDepth = b[far] - b[near] }
+end
+
+function Flow.Portal(fromId, toId)
+    local graph = Flow.graph
+    if not graph then return false end
+
+    if graph ~= portalGraph then portalGraph, rects, portals = graph, {}, {} end
+    local row = portals[fromId]
+    if not row then
+        row = {}
+        portals[fromId] = row
+    end
+
+    local portal = row[toId]
+    if portal ~= nil then return portal end
+
+    portal = false
+    local a, b = AreaRect(graph, fromId), AreaRect(graph, toId)
+    if a and b then
+        local xLo, xHi = math.max(a[1], b[1]), math.min(a[3], b[3])
+        local yLo, yHi = math.max(a[2], b[2]), math.min(a[4], b[4])
+        local alongX = xHi - xLo > 1 and yHi - yLo < PORTAL_OVERLAP
+        local alongY = yHi - yLo > 1 and xHi - xLo < PORTAL_OVERLAP
+        if alongX ~= alongY then
+            portal = alongX and EdgePortal(a, b, xLo, xHi, true) or EdgePortal(a, b, yLo, yHi, false)
+        end
+    end
+
+    row[toId] = portal
+
+    return portal
+end
+
 function Flow.ClimbLink(fromId, toId)
     local graph = Flow.graph
     local links = graph and graph.climb and graph.climb[fromId]
